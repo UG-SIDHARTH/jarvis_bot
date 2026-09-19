@@ -1,0 +1,7 @@
+services:
+  jarvis-bot:
+    build: .
+    container_name: jarvis_bot
+    restart: unless-stopped
+    env_file:
+      - .env
