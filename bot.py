@@ -102,39 +102,127 @@ if TELEGRAM_AVAILABLE:
 if DISCORD_AVAILABLE:
     intents = discord.Intents.default()
     intents.message_content = True  # Required to read message content
+    intents.members = True          # Required for role assignment and member management
     bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
+
+    # --- Interactive Self-Role UI Components ---
+    class SelfRoleButton(discord.ui.Button):
+        def __init__(self, role: discord.Role):
+            super().__init__(label=role.name, style=discord.ButtonStyle.primary, custom_id=f"self_role_{role.id}")
+            self.role_id = role.id
+
+        async def callback(self, interaction: discord.Interaction):
+            role = interaction.guild.get_role(self.role_id)
+            if not role:
+                await interaction.response.send_message("❌ This role no longer exists.", ephemeral=True)
+                return
+
+            if role in interaction.user.roles:
+                try:
+                    await interaction.user.remove_roles(role, reason="Self-assigned role toggle")
+                    await interaction.response.send_message(f"➖ Removed role **{role.name}** from you.", ephemeral=True)
+                except discord.Forbidden:
+                    await interaction.response.send_message("⚠️ I don't have permission to remove that role. Check my role hierarchy!", ephemeral=True)
+            else:
+                try:
+                    await interaction.user.add_roles(role, reason="Self-assigned role toggle")
+                    await interaction.response.send_message(f"➕ Added role **{role.name}** to you!", ephemeral=True)
+                except discord.Forbidden:
+                    await interaction.response.send_message("⚠️ I don't have permission to assign that role. Check my role hierarchy!", ephemeral=True)
+
+    class SelfRoleView(discord.ui.View):
+        def __init__(self, roles):
+            super().__init__(timeout=None)  # Persistent view
+            for role in roles[:25]:  # Discord limit: max 25 components
+                self.add_item(SelfRoleButton(role))
 
     @bot.event
     async def on_ready():
         print(f'🤖 Discord bot logged in as {bot.user} (ID: {bot.user.id})')
         print('------')
-        activity = discord.Game(name="with combined bot | !help")
+        activity = discord.Game(name="Customizing servers | !help")
         await bot.change_presence(activity=activity)
 
     @bot.event
     async def on_command_error(ctx, error):
         if isinstance(error, commands.CommandNotFound):
             await ctx.send("❓ Unknown command. Type `!help` for available commands.")
+        elif isinstance(error, commands.MissingPermissions):
+            missing = ", ".join(f"`{perm}`" for perm in error.missing_permissions)
+            await ctx.send(f"⛔ You don't have permission to use this command! Missing: {missing}")
+        elif isinstance(error, commands.BotMissingPermissions):
+            missing = ", ".join(f"`{perm}`" for perm in error.missing_permissions)
+            await ctx.send(f"⚠️ I don't have the required permissions to do that! Missing: {missing}")
+        elif isinstance(error, commands.RoleNotFound):
+            await ctx.send(f"❌ Role `{error.argument}` not found. Check the name or mention.")
+        elif isinstance(error, commands.MemberNotFound):
+            await ctx.send(f"❌ Member `{error.argument}` not found. Please mention them or use their ID.")
+        elif isinstance(error, commands.ChannelNotFound):
+            await ctx.send(f"❌ Channel `{error.argument}` not found.")
+        elif isinstance(error, commands.MissingRequiredArgument):
+            await ctx.send(f"⚠️ Missing required argument: `{error.param.name}`. Check `!help` for usage.")
+        elif isinstance(error, commands.BadArgument):
+            await ctx.send(f"⚠️ Invalid argument: {str(error)}")
         else:
             await ctx.send(f"⚠️ An error occurred: {str(error)}")
             print(f"Discord error: {error}")
 
+    # ==================== GENERAL COMMANDS ====================
+
     @bot.command(name='help')
     async def discord_help(ctx):
-        help_text = """
-📚 **Discord Bot Help**
-!help - Show this help message
-!hello - Get a friendly greeting
-!echo <text> - I'll repeat your text
-!ping - Check bot latency
-!info - Bot information
-!status - Check both platforms
-        """
-        await ctx.send(help_text)
+        embed = discord.Embed(
+            title="📚 Discord Bot Help Menu",
+            description="Here are all the available commands organized by category:",
+            color=discord.Color.blue()
+        )
+        embed.add_field(
+            name="🤖 General",
+            value=(
+                "`!help` - Show this menu\n"
+                "`!hello` - Friendly greeting\n"
+                "`!echo <text>` - Repeat your message\n"
+                "`!ping` - Latency check\n"
+                "`!info` - Bot information\n"
+                "`!status` - Bot operational status"
+            ),
+            inline=False
+        )
+        embed.add_field(
+            name="🛡️ Role Management (Requires Manage Roles)",
+            value=(
+                "`!giverole @user <role>` - Assign a role to a member\n"
+                "`!removerole @user <role>` - Remove a role from a member\n"
+                "`!createrole <name> [hex_color]` - Create a new role (e.g. `!createrole Gamer #ff0000`)\n"
+                "`!roles` - List all server roles and member counts\n"
+                "`!rolemenu <title> <@role1> [@role2...]` - Create an interactive self-role button panel"
+            ),
+            inline=False
+        )
+        embed.add_field(
+            name="📁 Channel Management (Requires Manage Channels)",
+            value=(
+                "`!createchannel <name> [text|voice] [category]` - Create a channel\n"
+                "`!deletechannel [#channel]` - Delete a channel (defaults to current)\n"
+                "`!createcategory <name>` - Create a new category"
+            ),
+            inline=False
+        )
+        embed.add_field(
+            name="📜 Rules & Server Setup (Requires Admin)",
+            value=(
+                "`!rules [#channel]` - Post a sleek pre-configured rules embed\n"
+                "`!postrules <Title> | <Rule 1> | <Rule 2>...` - Post custom rules\n"
+                "`!setup_server` - One-click server setup (channels, categories, roles)"
+            ),
+            inline=False
+        )
+        embed.set_footer(text="Tip: Ensure the bot's role is positioned high in Server Settings > Roles!")
+        await ctx.send(embed=embed)
 
     @bot.command(name='hello')
     async def discord_hello(ctx):
-        await ctx.send(f'👋 Hello {ctx.author.mention}! I\'m your combined bot!')
+        await ctx.send(f'👋 Hello {ctx.author.mention}! Ready to customize your server? Type `!help` to see commands.')
 
     @bot.command(name='echo')
     async def discord_echo(ctx, *, text: str):
@@ -147,23 +235,384 @@ if DISCORD_AVAILABLE:
 
     @bot.command(name='info')
     async def discord_info(ctx):
-        info_text = f"""
-🤖 **Combined Bot Info**
-Platform: Telegram + Discord
-Discord Latency: {round(bot.latency * 1000)}ms
-Servers: {len(bot.guilds)}
-Users: {len(set(bot.get_all_members()))}
-        """
-        await ctx.send(info_text)
+        embed = discord.Embed(title="🤖 Combined Bot Info", color=discord.Color.teal())
+        embed.add_field(name="Platform", value="Telegram + Discord", inline=True)
+        embed.add_field(name="Latency", value=f"{round(bot.latency * 1000)}ms", inline=True)
+        embed.add_field(name="Servers", value=str(len(bot.guilds)), inline=True)
+        embed.add_field(name="Total Users", value=str(len(set(bot.get_all_members()))), inline=True)
+        await ctx.send(embed=embed)
 
     @bot.command(name='status')
     async def discord_status(ctx):
         status_text = "✅ **Bot Status**\n"
         status_text += "Discord: Online 🟢\n"
         status_text += "Telegram: Check your chat 💬\n"
-        status_text += "Prefix: !\n"
-        status_text += "Use !help for commands"
+        status_text += "Prefix: `!`\n"
+        status_text += "Use `!help` for commands"
         await ctx.send(status_text)
+
+    # ==================== ROLE MANAGEMENT ====================
+
+    @bot.command(name='giverole')
+    @commands.has_permissions(manage_roles=True)
+    @commands.bot_has_permissions(manage_roles=True)
+    async def discord_giverole(ctx, member: discord.Member, *, role: discord.Role):
+        """Assign an existing role to a member."""
+        if role >= ctx.guild.me.top_role:
+            await ctx.send("❌ I cannot assign that role because it is higher than or equal to my highest role!")
+            return
+        if role >= ctx.author.top_role and ctx.author != ctx.guild.owner:
+            await ctx.send("❌ You cannot assign a role that is higher than or equal to your own highest role!")
+            return
+        if role in member.roles:
+            await ctx.send(f"ℹ️ {member.mention} already has the **{role.name}** role.")
+            return
+
+        await member.add_roles(role, reason=f"Given by {ctx.author}")
+        embed = discord.Embed(
+            title="✅ Role Assigned",
+            description=f"Successfully added **{role.name}** to {member.mention}.",
+            color=role.color if role.color.value != 0 else discord.Color.green()
+        )
+        await ctx.send(embed=embed)
+
+    @bot.command(name='removerole')
+    @commands.has_permissions(manage_roles=True)
+    @commands.bot_has_permissions(manage_roles=True)
+    async def discord_removerole(ctx, member: discord.Member, *, role: discord.Role):
+        """Remove a role from a member."""
+        if role >= ctx.guild.me.top_role:
+            await ctx.send("❌ I cannot remove that role because it is higher than or equal to my highest role!")
+            return
+        if role >= ctx.author.top_role and ctx.author != ctx.guild.owner:
+            await ctx.send("❌ You cannot remove a role that is higher than or equal to your own highest role!")
+            return
+        if role not in member.roles:
+            await ctx.send(f"ℹ️ {member.mention} does not have the **{role.name}** role.")
+            return
+
+        await member.remove_roles(role, reason=f"Removed by {ctx.author}")
+        embed = discord.Embed(
+            title="✅ Role Removed",
+            description=f"Successfully removed **{role.name}** from {member.mention}.",
+            color=discord.Color.orange()
+        )
+        await ctx.send(embed=embed)
+
+    @bot.command(name='createrole')
+    @commands.has_permissions(manage_roles=True)
+    @commands.bot_has_permissions(manage_roles=True)
+    async def discord_createrole(ctx, name: str, color: str = None):
+        """Create a new role with an optional hex color (e.g. !createrole Gamer #ff0000)."""
+        role_color = discord.Color.default()
+        if color:
+            clean_color = color.lstrip('#')
+            try:
+                role_color = discord.Color(int(clean_color, 16))
+            except ValueError:
+                await ctx.send("⚠️ Invalid hex color code. Creating role with default color instead.")
+
+        new_role = await ctx.guild.create_role(
+            name=name,
+            color=role_color,
+            reason=f"Created by {ctx.author}"
+        )
+        embed = discord.Embed(
+            title="✅ Role Created",
+            description=f"Role **{new_role.name}** was created successfully.",
+            color=new_role.color if new_role.color.value != 0 else discord.Color.green()
+        )
+        embed.add_field(name="Role ID", value=f"`{new_role.id}`", inline=True)
+        embed.add_field(name="Color", value=f"`{str(new_role.color)}`", inline=True)
+        await ctx.send(embed=embed)
+
+    @bot.command(name='roles')
+    async def discord_roles(ctx):
+        """List all server roles and their member counts."""
+        roles = [r for r in ctx.guild.roles if not r.is_default()]
+        roles.reverse()  # Highest hierarchy first
+
+        if not roles:
+            await ctx.send("ℹ️ No custom roles found in this server.")
+            return
+
+        lines = [f"• **{role.name}** ({len(role.members)} members) - `{role.id}`" for role in roles[:30]]
+        embed = discord.Embed(
+            title=f"🛡️ Server Roles ({len(roles)} total)",
+            description="\n".join(lines),
+            color=discord.Color.blurple()
+        )
+        if len(roles) > 30:
+            embed.set_footer(text=f"Showing top 30 of {len(roles)} roles")
+        await ctx.send(embed=embed)
+
+    @bot.command(name='rolemenu')
+    @commands.has_permissions(manage_roles=True)
+    @commands.bot_has_permissions(manage_roles=True)
+    async def discord_rolemenu(ctx, title: str, *roles: discord.Role):
+        """Create an interactive button menu for self-assignable roles.
+        Usage: !rolemenu "Pick Your Roles" @Gamer @Developer @Updates
+        """
+        if not roles:
+            await ctx.send("⚠️ Please mention at least one role. Example: `!rolemenu \"Pick Roles\" @Gamer @Coder`")
+            return
+
+        # Check bot hierarchy for all roles
+        unassignable = [r.name for r in roles if r >= ctx.guild.me.top_role]
+        if unassignable:
+            await ctx.send(f"❌ I cannot manage these roles because they are higher than or equal to my highest role: {', '.join(unassignable)}")
+            return
+
+        view = SelfRoleView(roles)
+        embed = discord.Embed(
+            title=f"🎭 {title}",
+            description="Click the buttons below to add or remove roles from yourself!",
+            color=discord.Color.gold()
+        )
+        embed.set_footer(text="Click once to get the role, click again to remove it.")
+        await ctx.send(embed=embed, view=view)
+
+    # ==================== CHANNEL MANAGEMENT ====================
+
+    @bot.command(name='createchannel')
+    @commands.has_permissions(manage_channels=True)
+    @commands.bot_has_permissions(manage_channels=True)
+    async def discord_createchannel(ctx, name: str, channel_type: str = "text", *, category_name: str = None):
+        """Create a text or voice channel.
+        Usage: !createchannel lounge text Community
+        """
+        category = None
+        if category_name:
+            category = discord.utils.find(lambda c: c.name.lower() == category_name.lower(), ctx.guild.categories)
+            if not category:
+                await ctx.send(f"⚠️ Category `{category_name}` not found. Creating channel without category.")
+
+        if channel_type.lower() in ["voice", "vc"]:
+            new_channel = await ctx.guild.create_voice_channel(name=name, category=category, reason=f"Created by {ctx.author}")
+            channel_icon = "🔊"
+        else:
+            new_channel = await ctx.guild.create_text_channel(name=name, category=category, reason=f"Created by {ctx.author}")
+            channel_icon = "💬"
+
+        embed = discord.Embed(
+            title="✅ Channel Created",
+            description=f"{channel_icon} Successfully created {new_channel.mention}!",
+            color=discord.Color.green()
+        )
+        if category:
+            embed.add_field(name="Category", value=category.name, inline=True)
+        embed.add_field(name="Type", value=channel_type.capitalize(), inline=True)
+        await ctx.send(embed=embed)
+
+    @bot.command(name='deletechannel')
+    @commands.has_permissions(manage_channels=True)
+    @commands.bot_has_permissions(manage_channels=True)
+    async def discord_deletechannel(ctx, channel: discord.abc.GuildChannel = None):
+        """Delete a channel. Defaults to current channel if none specified.
+        Usage: !deletechannel #spam
+        """
+        target_channel = channel or ctx.channel
+        channel_name = target_channel.name
+
+        # If deleting the current channel, we won't be able to reply after delete
+        is_current = target_channel.id == ctx.channel.id
+
+        await target_channel.delete(reason=f"Deleted by {ctx.author}")
+
+        if not is_current:
+            embed = discord.Embed(
+                title="🗑️ Channel Deleted",
+                description=f"Channel **#{channel_name}** has been deleted.",
+                color=discord.Color.red()
+            )
+            await ctx.send(embed=embed)
+
+    @bot.command(name='createcategory')
+    @commands.has_permissions(manage_channels=True)
+    @commands.bot_has_permissions(manage_channels=True)
+    async def discord_createcategory(ctx, *, name: str):
+        """Create a new category for organizing channels.
+        Usage: !createcategory Gaming
+        """
+        category = await ctx.guild.create_category(name=name, reason=f"Created by {ctx.author}")
+        embed = discord.Embed(
+            title="✅ Category Created",
+            description=f"📁 Successfully created category **{category.name}**!",
+            color=discord.Color.green()
+        )
+        await ctx.send(embed=embed)
+
+    # ==================== RULES & SERVER SETUP ====================
+
+    @bot.command(name='rules')
+    @commands.has_permissions(administrator=True)
+    async def discord_rules(ctx, channel: discord.TextChannel = None):
+        """Post a professionally formatted community rules embed.
+        Usage: !rules or !rules #rules
+        """
+        target_channel = channel or ctx.channel
+        embed = discord.Embed(
+            title="📜 Official Server Rules & Guidelines",
+            description="Welcome to our server! To ensure an enjoyable and safe environment for everyone, please follow these rules:",
+            color=discord.Color.dark_teal()
+        )
+        embed.add_field(
+            name="1️⃣ Be Respectful & Kind",
+            value="Treat all members with respect. Harassment, hate speech, bullying, toxicity, and discrimination will not be tolerated.",
+            inline=False
+        )
+        embed.add_field(
+            name="2️⃣ No Spam or Advertising",
+            value="Avoid spamming messages, emojis, mentions, or images. Self-promotion and server invites are only allowed in designated channels.",
+            inline=False
+        )
+        embed.add_field(
+            name="3️⃣ Keep Content Appropriate (SFW)",
+            value="No NSFW, explicit, gore, or illegal content. Keep profile pictures, nicknames, and statuses clean.",
+            inline=False
+        )
+        embed.add_field(
+            name="4️⃣ Use Channels Appropriately",
+            value="Post topics in their respective channels (e.g. memes in #memes, bot commands in #bot-commands).",
+            inline=False
+        )
+        embed.add_field(
+            name="5️⃣ Follow Discord's Terms of Service",
+            value="All members must adhere to [Discord's Community Guidelines](https://discord.com/guidelines) and [Terms of Service](https://discord.com/terms).",
+            inline=False
+        )
+        embed.add_field(
+            name="6️⃣ Respect Staff & Moderation",
+            value="Moderators have the final say. If you have an issue, please open a ticket or DM a staff member privately.",
+            inline=False
+        )
+        embed.set_footer(text="By remaining in this server, you agree to follow these rules.")
+        await target_channel.send(embed=embed)
+        if target_channel != ctx.channel:
+            await ctx.send(f"✅ Rules have been posted to {target_channel.mention}!")
+
+    @bot.command(name='postrules')
+    @commands.has_permissions(administrator=True)
+    async def discord_postrules(ctx, *, content: str):
+        """Post custom rules formatted with pipes.
+        Usage: !postrules Server Rules | 1. Be kind | 2. No spam | 3. Have fun
+        """
+        parts = [p.strip() for p in content.split('|')]
+        if len(parts) < 2:
+            await ctx.send("⚠️ Format: `!postrules Title | Rule 1 | Rule 2 | ...`")
+            return
+
+        title = parts[0]
+        rules_list = parts[1:]
+
+        embed = discord.Embed(
+            title=f"📜 {title}",
+            description="Please read and abide by the rules below:",
+            color=discord.Color.dark_purple()
+        )
+        for i, rule in enumerate(rules_list, 1):
+            embed.add_field(name=f"Rule {i}", value=rule, inline=False)
+
+        embed.set_footer(text="Thank you for keeping our community safe!")
+        await ctx.send(embed=embed)
+
+    @bot.command(name='setup_server')
+    @commands.has_permissions(administrator=True)
+    @commands.bot_has_permissions(administrator=True, manage_channels=True, manage_roles=True)
+    async def discord_setup_server(ctx):
+        """Automated one-click server setup with categories, channels, roles, and rules."""
+        status_msg = await ctx.send("⚙️ Starting automated server setup... This may take a few seconds.")
+
+        guild = ctx.guild
+
+        # 1. Create Default Roles if they don't exist
+        created_roles = []
+        role_definitions = [
+            ("Admin", discord.Color.red()),
+            ("Moderator", discord.Color.blue()),
+            ("Member", discord.Color.green())
+        ]
+        for role_name, role_color in role_definitions:
+            existing = discord.utils.get(guild.roles, name=role_name)
+            if not existing:
+                try:
+                    new_r = await guild.create_role(name=role_name, color=role_color, reason="Automated Server Setup")
+                    created_roles.append(new_r.name)
+                except discord.Forbidden:
+                    pass
+
+        # 2. Create Categories & Channels
+        structure = [
+            {
+                "category": "📌 INFORMATION",
+                "text": ["welcome-and-rules", "announcements"],
+                "voice": []
+            },
+            {
+                "category": "💬 COMMUNITY",
+                "text": ["general", "bot-commands", "memes"],
+                "voice": []
+            },
+            {
+                "category": "🔊 VOICE CHANNELS",
+                "text": [],
+                "voice": ["General Voice", "Gaming Lounge"]
+            }
+        ]
+
+        rules_channel = None
+
+        for group in structure:
+            cat_name = group["category"]
+            category = discord.utils.get(guild.categories, name=cat_name)
+            if not category:
+                category = await guild.create_category(name=cat_name, reason="Automated Server Setup")
+
+            for t_name in group["text"]:
+                ch = discord.utils.get(guild.text_channels, name=t_name, category=category)
+                if not ch:
+                    ch = await guild.create_text_channel(name=t_name, category=category, reason="Automated Server Setup")
+                if t_name == "welcome-and-rules":
+                    rules_channel = ch
+
+            for v_name in group["voice"]:
+                vc = discord.utils.get(guild.voice_channels, name=v_name, category=category)
+                if not vc:
+                    await guild.create_voice_channel(name=v_name, category=category, reason="Automated Server Setup")
+
+        # 3. Post Rules in the rules channel if found
+        if rules_channel:
+            rules_embed = discord.Embed(
+                title="📜 Welcome to the Server!",
+                description="Welcome! Please take a moment to review our server rules:",
+                color=discord.Color.dark_teal()
+            )
+            rules_embed.add_field(name="1️⃣ Be Respectful", value="Treat all members with courtesy and kindness.", inline=False)
+            rules_embed.add_field(name="2️⃣ No Spam or Self-Promo", value="Keep channels clean and free of unsolicited advertisements.", inline=False)
+            rules_embed.add_field(name="3️⃣ SFW Server", value="Keep all conversations, media, and profiles appropriate.", inline=False)
+            rules_embed.add_field(name="4️⃣ Follow Discord ToS", value="Adhere to Discord's Terms of Service at all times.", inline=False)
+            rules_embed.set_footer(text="Enjoy your stay!")
+            await rules_channel.send(embed=rules_embed)
+
+        summary_embed = discord.Embed(
+            title="🎉 Server Setup Complete!",
+            description="Your server has been customized with essential channels, categories, and roles.",
+            color=discord.Color.green()
+        )
+        summary_embed.add_field(
+            name="📁 Categories Created",
+            value="• 📌 INFORMATION\n• 💬 COMMUNITY\n• 🔊 VOICE CHANNELS",
+            inline=True
+        )
+        summary_embed.add_field(
+            name="🛡️ Roles Created",
+            value=", ".join(created_roles) if created_roles else "Existing roles retained",
+            inline=True
+        )
+        if rules_channel:
+            summary_embed.add_field(name="📜 Rules Channel", value=rules_channel.mention, inline=False)
+
+        await status_msg.edit(content=None, embed=summary_embed)
 
     def run_discord_bot():
         """Run Discord bot in separate thread"""
