@@ -10,7 +10,9 @@ import sqlite3
 import random
 import re
 import datetime
+import secrets
 from typing import Optional, Union, List, Dict, Any, Tuple, Set
+from aiohttp import web
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -51,6 +53,11 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 DISCORD_PRIVILEGED_INTENTS = os.getenv("DISCORD_PRIVILEGED_INTENTS", "true").lower() in ("true", "1", "yes")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 AI_MODEL = os.getenv("AI_MODEL", "gemini-2.5-flash")
+
+# Web Claim Link Server Configuration
+CLAIM_SERVER_HOST = os.getenv("CLAIM_SERVER_HOST", "0.0.0.0")
+CLAIM_SERVER_PORT = int(os.getenv("CLAIM_SERVER_PORT", "8080"))
+CLAIM_SERVER_BASE_URL = os.getenv("CLAIM_SERVER_BASE_URL", f"http://localhost:{CLAIM_SERVER_PORT}").rstrip("/")
 
 # ===== CONVERSATION MEMORY =====
 conversation_sessions: Dict[str, List[Dict[str, Any]]] = {}
@@ -114,9 +121,262 @@ def init_leveling_db():
                 PRIMARY KEY (guild_id, user_id)
             );
             """)
+            conn.execute("""
+            CREATE TABLE IF NOT EXISTS role_claim_links (
+                token TEXT PRIMARY KEY,
+                guild_id INTEGER,
+                role_id INTEGER,
+                target_user_id INTEGER,
+                max_uses INTEGER DEFAULT 1,
+                uses_count INTEGER DEFAULT 0,
+                created_by INTEGER,
+                expires_at REAL,
+                created_at REAL
+            );
+            """)
+            conn.execute("""
+            CREATE TABLE IF NOT EXISTS invite_roles (
+                invite_code TEXT PRIMARY KEY,
+                guild_id INTEGER,
+                role_id INTEGER,
+                created_by INTEGER,
+                created_at REAL
+            );
+            """)
             conn.commit()
     except Exception as e:
         print(f"⚠️ Failed to initialize leveling & moderation DB: {e}")
+
+def create_role_claim_link(
+    guild_id: int,
+    role_id: int,
+    created_by: int,
+    target_user_id: Optional[int] = None,
+    max_uses: int = 1,
+    expires_hours: Optional[float] = 24.0
+) -> str:
+    """Generate a unique secure token and store claim link in SQLite."""
+    token = secrets.token_urlsafe(16)
+    expires_at = time.time() + (expires_hours * 3600) if expires_hours else None
+    try:
+        with sqlite3.connect(LEVELS_DB_PATH) as conn:
+            conn.execute(
+                "INSERT INTO role_claim_links (token, guild_id, role_id, target_user_id, max_uses, uses_count, created_by, expires_at, created_at) "
+                "VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)",
+                (token, guild_id, role_id, target_user_id, max_uses, created_by, expires_at, time.time())
+            )
+            conn.commit()
+        return token
+    except Exception as e:
+        print(f"⚠️ Error creating role claim link: {e}")
+        return ""
+
+def get_role_claim_link(token: str) -> Optional[Dict[str, Any]]:
+    """Retrieve role claim link details by token."""
+    try:
+        with sqlite3.connect(LEVELS_DB_PATH) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT token, guild_id, role_id, target_user_id, max_uses, uses_count, created_by, expires_at, created_at "
+                "FROM role_claim_links WHERE token = ?",
+                (token,)
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            return {
+                "token": row[0],
+                "guild_id": row[1],
+                "role_id": row[2],
+                "target_user_id": row[3],
+                "max_uses": row[4],
+                "uses_count": row[5],
+                "created_by": row[6],
+                "expires_at": row[7],
+                "created_at": row[8]
+            }
+    except Exception as e:
+        print(f"⚠️ Error fetching role claim link: {e}")
+        return None
+
+def increment_claim_link_uses(token: str):
+    """Increment the uses count of a claim link."""
+    try:
+        with sqlite3.connect(LEVELS_DB_PATH) as conn:
+            conn.execute("UPDATE role_claim_links SET uses_count = uses_count + 1 WHERE token = ?", (token,))
+            conn.commit()
+    except Exception as e:
+        print(f"⚠️ Error incrementing claim link uses: {e}")
+
+def add_invite_role(invite_code: str, guild_id: int, role_id: int, created_by: int) -> bool:
+    """Associate a Discord invite link with a role."""
+    try:
+        with sqlite3.connect(LEVELS_DB_PATH) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO invite_roles (invite_code, guild_id, role_id, created_by, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (invite_code, guild_id, role_id, created_by, time.time())
+            )
+            conn.commit()
+        return True
+    except Exception as e:
+        print(f"⚠️ Error adding invite role: {e}")
+        return False
+
+def get_invite_role(guild_id: int, invite_code: str) -> Optional[int]:
+    """Retrieve the role ID associated with an invite code."""
+    try:
+        with sqlite3.connect(LEVELS_DB_PATH) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT role_id FROM invite_roles WHERE guild_id = ? AND invite_code = ?",
+                (guild_id, invite_code)
+            )
+            row = cur.fetchone()
+            return row[0] if row else None
+    except Exception as e:
+        print(f"⚠️ Error fetching invite role: {e}")
+        return None
+
+def render_claim_html(title: str, message: str, is_error: bool = False, retry_token: Optional[str] = None) -> str:
+    status_icon = "❌" if is_error else "🎉"
+    accent_color = "#ef4444" if is_error else "#10b981"
+    retry_html = f'<br><a href="/claim?token={retry_token}" style="display:inline-block;margin-top:16px;background:#3b82f6;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;font-weight:600;">Try Again</a>' if retry_token else ''
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{title} — J.A.R.V.I.S.</title>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }}
+        body {{
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            color: #f8fafc;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }}
+        .card {{
+            background: rgba(30, 41, 59, 0.7);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            padding: 40px;
+            max-width: 480px;
+            width: 100%;
+            text-align: center;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
+        }}
+        .icon {{ font-size: 54px; margin-bottom: 20px; }}
+        h1 {{ font-size: 24px; font-weight: 700; margin-bottom: 12px; color: {accent_color}; }}
+        p {{ color: #cbd5e1; font-size: 16px; line-height: 1.6; margin-bottom: 20px; }}
+        .footer {{ margin-top: 24px; font-size: 12px; color: #64748b; }}
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="icon">{status_icon}</div>
+        <h1>{title}</h1>
+        <p>{message}</p>
+        {retry_html}
+        <div class="footer">J.A.R.V.I.S. Protocol • Role Claim System</div>
+    </div>
+</body>
+</html>"""
+
+def render_claim_form_html(guild_name: str, role_name: str, token: str) -> str:
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Claim {role_name} — {guild_name}</title>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }}
+        body {{
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            color: #f8fafc;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }}
+        .card {{
+            background: rgba(30, 41, 59, 0.7);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            padding: 40px;
+            max-width: 480px;
+            width: 100%;
+            text-align: center;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
+        }}
+        .icon {{ font-size: 48px; margin-bottom: 16px; }}
+        h1 {{ font-size: 22px; font-weight: 700; margin-bottom: 8px; color: #f8fafc; }}
+        .badge {{
+            display: inline-block;
+            background: rgba(59, 130, 246, 0.2);
+            color: #60a5fa;
+            border: 1px solid rgba(59, 130, 246, 0.4);
+            border-radius: 9999px;
+            padding: 4px 14px;
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 20px;
+        }}
+        p {{ color: #94a3b8; font-size: 14px; line-height: 1.5; margin-bottom: 20px; }}
+        input[type="text"] {{
+            width: 100%;
+            padding: 12px 16px;
+            background: rgba(15, 23, 42, 0.8);
+            border: 1px solid #334155;
+            border-radius: 8px;
+            color: #ffffff;
+            font-size: 15px;
+            margin-bottom: 16px;
+            outline: none;
+        }}
+        input[type="text"]:focus {{ border-color: #3b82f6; }}
+        button {{
+            width: 100%;
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            color: #ffffff;
+            font-size: 16px;
+            font-weight: 600;
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            box-shadow: 0 4px 6px -1px rgba(16, 185, 129, 0.3);
+        }}
+        button:hover {{ opacity: 0.95; transform: translateY(-1px); }}
+        .hint {{ font-size: 12px; color: #64748b; margin-top: 16px; text-align: left; line-height: 1.4; }}
+        .footer {{ margin-top: 24px; font-size: 12px; color: #64748b; }}
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="icon">🔗</div>
+        <h1>Claim Role in {guild_name}</h1>
+        <div class="badge">@{role_name}</div>
+        <p>Enter your Discord User ID or Username below to claim this role on the server.</p>
+        <form method="POST" action="/claim">
+            <input type="hidden" name="token" value="{token}">
+            <input type="text" name="user_id" placeholder="e.g. 123456789012345678 or Username" required autofocus>
+            <button type="submit">⚡ Claim Role</button>
+        </form>
+        <div class="hint">
+            <strong>Tip:</strong> You can find your User ID in Discord by enabling Developer Mode (User Settings > Advanced > Developer Mode), then right-clicking your avatar and selecting <em>"Copy User ID"</em>.
+        </div>
+        <div class="footer">J.A.R.V.I.S. Protocol • Role Claim System</div>
+    </div>
+</body>
+</html>"""
 
 def get_user_strikes(guild_id: int, user_id: int) -> int:
     """Count total warnings/strikes for a user in a guild."""
@@ -1094,12 +1354,224 @@ if DISCORD_AVAILABLE:
                     print(f"⚠️ Failed to unban user {user_id} in guild {guild_id}: {e}")
             remove_temp_ban(guild_id, user_id)
 
+    # --- Tracking & Web Server State ---
+    guild_invites_cache: Dict[int, Dict[str, int]] = {}
+    web_server_task = None
+
+    async def handle_claim_get(request: web.Request) -> web.Response:
+        token = request.query.get("token", "").strip()
+        if not token:
+            return web.Response(
+                text=render_claim_html("❌ Missing Token", "No claim token was provided in the link.", is_error=True),
+                content_type="text/html",
+                status=400
+            )
+
+        link_data = get_role_claim_link(token)
+        if not link_data:
+            return web.Response(
+                text=render_claim_html("❌ Invalid Link", "This claim link does not exist or has expired.", is_error=True),
+                content_type="text/html",
+                status=404
+            )
+
+        if link_data["expires_at"] and time.time() > link_data["expires_at"]:
+            return web.Response(
+                text=render_claim_html("⏳ Link Expired", "This claim link has expired.", is_error=True),
+                content_type="text/html",
+                status=410
+            )
+
+        if link_data["max_uses"] is not None and link_data["uses_count"] >= link_data["max_uses"]:
+            return web.Response(
+                text=render_claim_html("⚠️ Fully Claimed", "This link has already reached its maximum number of uses.", is_error=True),
+                content_type="text/html",
+                status=410
+            )
+
+        guild = bot.get_guild(link_data["guild_id"])
+        if not guild:
+            return web.Response(
+                text=render_claim_html("❌ Server Not Found", "The Discord server for this link was not found.", is_error=True),
+                content_type="text/html",
+                status=404
+            )
+
+        role = guild.get_role(link_data["role_id"])
+        if not role:
+            return web.Response(
+                text=render_claim_html("❌ Role Not Found", "The role for this link no longer exists.", is_error=True),
+                content_type="text/html",
+                status=404
+            )
+
+        # 1. If target_user_id is already specified (personalized link):
+        if link_data["target_user_id"]:
+            member = guild.get_member(link_data["target_user_id"])
+            if not member:
+                return web.Response(
+                    text=render_claim_html("❌ Member Not in Server", "You must be in the server to claim this role.", is_error=True),
+                    content_type="text/html",
+                    status=404
+                )
+
+            if role in member.roles:
+                return web.Response(
+                    text=render_claim_html("ℹ️ Already Claimed", f"You already have the <strong>{role.name}</strong> role in <strong>{guild.name}</strong>!"),
+                    content_type="text/html"
+                )
+
+            if role >= guild.me.top_role:
+                return web.Response(
+                    text=render_claim_html("⚠️ Hierarchy Error", "Bot role must be higher than the target role in Server Settings.", is_error=True),
+                    content_type="text/html",
+                    status=500
+                )
+
+            try:
+                await member.add_roles(role, reason=f"Claimed via web link (token: {token[:8]}...)")
+                increment_claim_link_uses(token)
+                return web.Response(
+                    text=render_claim_html(
+                        "🎉 Role Claimed Successfully!",
+                        f"Congratulations, <strong>{member.display_name}</strong>! You have been granted the <strong>{role.name}</strong> role in <strong>{guild.name}</strong>.<br><br>You can now return to Discord."
+                    ),
+                    content_type="text/html"
+                )
+            except Exception as e:
+                return web.Response(
+                    text=render_claim_html("❌ Error Assigning Role", str(e), is_error=True),
+                    content_type="text/html",
+                    status=500
+                )
+
+        # 2. If open link: show the claim form
+        return web.Response(
+            text=render_claim_form_html(guild.name, role.name, token),
+            content_type="text/html"
+        )
+
+    async def handle_claim_post(request: web.Request) -> web.Response:
+        data = await request.post()
+        token = data.get("token", "").strip()
+        user_input = data.get("user_id", "").strip()
+
+        if not token or not user_input:
+            return web.Response(
+                text=render_claim_html("❌ Missing Information", "Please enter your Discord User ID or Username.", is_error=True, retry_token=token),
+                content_type="text/html",
+                status=400
+            )
+
+        link_data = get_role_claim_link(token)
+        if not link_data or (link_data["max_uses"] and link_data["uses_count"] >= link_data["max_uses"]):
+            return web.Response(
+                text=render_claim_html("⚠️ Invalid Link", "This link is no longer valid or has been fully claimed.", is_error=True),
+                content_type="text/html",
+                status=410
+            )
+
+        if link_data["expires_at"] and time.time() > link_data["expires_at"]:
+            return web.Response(
+                text=render_claim_html("⏳ Link Expired", "This claim link has expired.", is_error=True),
+                content_type="text/html",
+                status=410
+            )
+
+        guild = bot.get_guild(link_data["guild_id"])
+        role = guild.get_role(link_data["role_id"]) if guild else None
+        if not guild or not role:
+            return web.Response(
+                text=render_claim_html("❌ Server or Role Not Found", "Could not locate the server or role.", is_error=True),
+                content_type="text/html",
+                status=404
+            )
+
+        # Find member by ID or username
+        member = None
+        if user_input.isdigit():
+            member = guild.get_member(int(user_input))
+        if not member:
+            member = discord.utils.find(lambda m: m.name.lower() == user_input.lower() or m.display_name.lower() == user_input.lower(), guild.members)
+
+        if not member:
+            return web.Response(
+                text=render_claim_html(
+                    "❌ Member Not Found",
+                    f"Could not find member <strong>{user_input}</strong> in <strong>{guild.name}</strong>.<br><br>Make sure you have joined the server and entered your exact Discord User ID or Username.",
+                    is_error=True,
+                    retry_token=token
+                ),
+                content_type="text/html",
+                status=404
+            )
+
+        if role in member.roles:
+            return web.Response(
+                text=render_claim_html(
+                    "ℹ️ Already Claimed",
+                    f"<strong>{member.display_name}</strong> already has the <strong>{role.name}</strong> role in <strong>{guild.name}</strong>!"
+                ),
+                content_type="text/html"
+            )
+
+        if role >= guild.me.top_role:
+            return web.Response(
+                text=render_claim_html("⚠️ Hierarchy Error", "Bot role must be higher than the target role in Server Settings.", is_error=True),
+                content_type="text/html",
+                status=500
+            )
+
+        try:
+            await member.add_roles(role, reason=f"Claimed via web link (token: {token[:8]}...)")
+            increment_claim_link_uses(token)
+            return web.Response(
+                text=render_claim_html(
+                    "🎉 Role Claimed Successfully!",
+                    f"Congratulations, <strong>{member.display_name}</strong>! You have been granted the <strong>{role.name}</strong> role in <strong>{guild.name}</strong>.<br><br>You can now close this tab and return to Discord."
+                ),
+                content_type="text/html"
+            )
+        except Exception as e:
+            return web.Response(
+                text=render_claim_html("❌ Error Assigning Role", str(e), is_error=True),
+                content_type="text/html",
+                status=500
+            )
+
+    async def start_web_claim_server():
+        """Start the lightweight web claim server using aiohttp."""
+        try:
+            app = web.Application()
+            app.router.add_get('/claim', handle_claim_get)
+            app.router.add_post('/claim', handle_claim_post)
+            runner = web.AppRunner(app)
+            await runner.setup()
+            site = web.TCPSite(runner, CLAIM_SERVER_HOST, CLAIM_SERVER_PORT)
+            await site.start()
+            print(f"🌐 Role Claim Web Server running on {CLAIM_SERVER_BASE_URL}/claim")
+        except Exception as e:
+            print(f"⚠️ Could not start Role Claim Web Server on port {CLAIM_SERVER_PORT}: {e}")
+
     @bot.event
     async def on_ready():
+        global web_server_task
         print(f'🤖 Discord bot logged in as {bot.user} (ID: {bot.user.id})')
         print('------')
         # Initialize leveling database
         init_leveling_db()
+
+        # Start web claim server if not already running
+        if web_server_task is None:
+            web_server_task = bot.loop.create_task(start_web_claim_server())
+
+        # Cache guild invites for tracked role assignment
+        for g in bot.guilds:
+            try:
+                invites = await g.invites()
+                guild_invites_cache[g.id] = {inv.code: inv.uses for inv in invites}
+            except Exception:
+                pass
 
         # Start voice XP loop if not already running
         if not voice_xp_updater.is_running():
@@ -1440,8 +1912,38 @@ if DISCORD_AVAILABLE:
 
     @bot.event
     async def on_member_join(member: discord.Member):
-        """Greet new members when they join the server."""
+        """Greet new members when they join the server and handle invite roles."""
         guild = member.guild
+
+        # Check if joined via a tracked invite link
+        used_invite_code = None
+        try:
+            current_invites = await guild.invites()
+            old_invites = guild_invites_cache.get(guild.id, {})
+            for inv in current_invites:
+                if inv.code in old_invites:
+                    if inv.uses > old_invites[inv.code]:
+                        used_invite_code = inv.code
+                        break
+                elif inv.uses > 0:
+                    used_invite_code = inv.code
+                    break
+            guild_invites_cache[guild.id] = {inv.code: inv.uses for inv in current_invites}
+        except Exception:
+            pass
+
+        assigned_invite_role = None
+        if used_invite_code:
+            role_id = get_invite_role(guild.id, used_invite_code)
+            if role_id:
+                auto_role = guild.get_role(role_id)
+                if auto_role and auto_role < guild.me.top_role:
+                    try:
+                        await member.add_roles(auto_role, reason=f"Auto-assigned via invite link {used_invite_code}")
+                        assigned_invite_role = auto_role
+                        print(f"✅ Auto-assigned {auto_role.name} to {member} via invite link {used_invite_code}")
+                    except Exception as e:
+                        print(f"⚠️ Failed to auto-assign invite role: {e}")
 
         # 1. Determine the appropriate welcome channel
         welcome_channel = None
@@ -1542,6 +2044,8 @@ if DISCORD_AVAILABLE:
                 "`/createrole <name> [color]` - Create a new role (e.g. `/createrole Gamer #ff0000`)\n"
                 "`/roles` - List all server roles and member counts\n"
                 "`/claimrole @role [options]` - Create a 1-click button embed for members to claim a role\n"
+                "`/claimlink @role [member]` - Generate a web link for members to claim a role\n"
+                "`/inviterole @role [channel]` - Create a Discord invite that auto-assigns a role\n"
                 "`/rolemenu <title> <@role1> [@role2...]` - Create an interactive self-role button panel"
             ),
             inline=False
@@ -2420,6 +2924,152 @@ if DISCORD_AVAILABLE:
             await ctx.send(f"✅ Claim role button successfully posted in {target_channel.mention}!", ephemeral=True)
         else:
             await ctx.send(embed=embed, view=view)
+
+    @bot.hybrid_command(
+        name='claimlink',
+        aliases=['createrolelink', 'rolelink'],
+        description="Generate a web link that gives users a role when accessed (Manage Roles)"
+    )
+    @app_commands.describe(
+        role="The role to give when link is accessed",
+        member="Specific member this link is for (optional, leave blank for open link)",
+        max_uses="Maximum number of times this link can be claimed (default: 1)",
+        expires_hours="Hours until link expires (default: 24, 0 for no expiration)"
+    )
+    @commands.has_permissions(manage_roles=True)
+    @commands.bot_has_permissions(manage_roles=True)
+    async def discord_claimlink(
+        ctx,
+        role: discord.Role,
+        member: Optional[discord.Member] = None,
+        max_uses: int = 1,
+        expires_hours: float = 24.0
+    ):
+        """Generate a web link that gives users a role when clicked in a browser.
+        Usage:
+          /claimlink @VIP
+          /claimlink role:@VIP member:@User max_uses:1 expires_hours:48
+        """
+        if not ctx.guild:
+            await ctx.send("❌ This command can only be used within a server.")
+            return
+
+        if role >= ctx.guild.me.top_role:
+            await ctx.send("❌ I cannot assign that role because it is higher than or equal to my highest role in Server Settings > Roles!")
+            return
+
+        if role >= ctx.author.top_role and ctx.author != ctx.guild.owner:
+            await ctx.send("❌ You cannot assign a role that is higher than or equal to your own highest role!")
+            return
+
+        exp = expires_hours if expires_hours > 0 else None
+        target_uid = member.id if member else None
+
+        token = create_role_claim_link(
+            guild_id=ctx.guild.id,
+            role_id=role.id,
+            created_by=ctx.author.id,
+            target_user_id=target_uid,
+            max_uses=max(1, max_uses),
+            expires_hours=exp
+        )
+
+        if not token:
+            await ctx.send("❌ Failed to generate claim link.")
+            return
+
+        link_url = f"{CLAIM_SERVER_BASE_URL}/claim?token={token}"
+
+        embed = discord.Embed(
+            title="🔗 Role Claim Link Generated",
+            description=f"Accessing this link will grant the **{role.name}** role!",
+            color=role.color if role.color.value != 0 else discord.Color.green()
+        )
+        embed.add_field(name="🌐 Claim URL", value=f"[👉 Click Here to Claim Role]({link_url})\n`{link_url}`", inline=False)
+        embed.add_field(name="🛡️ Role", value=role.mention, inline=True)
+        if member:
+            embed.add_field(name="👤 Assigned To", value=member.mention, inline=True)
+        else:
+            embed.add_field(name="👥 Max Claims", value=f"{max_uses} use(s)", inline=True)
+
+        exp_text = f"{expires_hours} hours" if exp else "Never"
+        embed.add_field(name="⏳ Expiration", value=exp_text, inline=True)
+        embed.set_footer(text="Tip: You can send this link anywhere (DMs, website, email) for users to claim their role!")
+
+        await ctx.send(embed=embed, ephemeral=True)
+
+    @bot.hybrid_command(
+        name='inviterole',
+        aliases=['roleinvite'],
+        description="Create a Discord invite that automatically grants a role to anyone who joins with it"
+    )
+    @app_commands.describe(
+        role="The role to automatically grant when someone joins using this invite",
+        channel="Channel the invite should lead to (defaults to current channel)",
+        max_uses="Maximum uses (0 for unlimited, default: 0)",
+        max_age_hours="Hours until invite expires (0 for never, default: 0)"
+    )
+    @commands.has_permissions(manage_roles=True, create_instant_invite=True)
+    @commands.bot_has_permissions(manage_roles=True, create_instant_invite=True)
+    async def discord_inviterole(
+        ctx,
+        role: discord.Role,
+        channel: Optional[discord.TextChannel] = None,
+        max_uses: int = 0,
+        max_age_hours: float = 0.0
+    ):
+        """Create a Discord invite link that automatically grants a role to anyone who joins with it.
+        Usage:
+          /inviterole @Member
+          /inviterole role:@VIP channel:#welcome max_uses:10 max_age_hours:48
+        """
+        if not ctx.guild:
+            await ctx.send("❌ This command can only be used within a server.")
+            return
+
+        if role >= ctx.guild.me.top_role:
+            await ctx.send("❌ I cannot assign that role because it is higher than or equal to my highest role in Server Settings > Roles!")
+            return
+
+        if role >= ctx.author.top_role and ctx.author != ctx.guild.owner:
+            await ctx.send("❌ You cannot assign a role that is higher than or equal to your own highest role!")
+            return
+
+        target_ch = channel or ctx.channel
+        max_age_sec = int(max_age_hours * 3600) if max_age_hours > 0 else 0
+
+        try:
+            invite = await target_ch.create_invite(
+                max_age=max_age_sec,
+                max_uses=max(0, max_uses),
+                unique=True,
+                reason=f"Role invite created by {ctx.author} for {role.name}"
+            )
+        except Exception as e:
+            await ctx.send(f"❌ Failed to create invite: `{e}`")
+            return
+
+        # Store in SQLite
+        add_invite_role(invite.code, ctx.guild.id, role.id, ctx.author.id)
+
+        # Update cache
+        if ctx.guild.id not in guild_invites_cache:
+            guild_invites_cache[ctx.guild.id] = {}
+        guild_invites_cache[ctx.guild.id][invite.code] = 0
+
+        embed = discord.Embed(
+            title="🔗 Role Invite Link Created",
+            description=f"Anyone who joins using this invite link will automatically be given the **{role.name}** role!",
+            color=role.color if role.color.value != 0 else discord.Color.gold()
+        )
+        embed.add_field(name="📨 Invite Link", value=f"`{invite.url}`\n[👉 Click to Join]({invite.url})", inline=False)
+        embed.add_field(name="🛡️ Role", value=role.mention, inline=True)
+        embed.add_field(name="📍 Channel", value=target_ch.mention, inline=True)
+        embed.add_field(name="👥 Max Uses", value="Unlimited" if max_uses == 0 else str(max_uses), inline=True)
+        embed.add_field(name="⏳ Expiration", value="Never" if max_age_hours == 0 else f"{max_age_hours} hours", inline=True)
+        embed.set_footer(text="J.A.R.V.I.S. Protocol • Invite Role System")
+
+        await ctx.send(embed=embed)
 
     # ==================== CHANNEL MANAGEMENT ====================
 
