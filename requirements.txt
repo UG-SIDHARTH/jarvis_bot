@@ -2,3 +2,5 @@ python-telegram-bot>=20.0
 discord.py>=2.3.0
 python-dotenv>=1.0.0
 pypresence>=4.3.0
+google-genai>=0.1.0
+httpx>=0.24.0

@@ -30,11 +30,104 @@ except ImportError:
     DISCORD_AVAILABLE = False
     print("⚠️  Discord library not installed. Run: pip install discord.py")
 
+# ===== AI (GEMINI) SETUP =====
+try:
+    from google import genai
+    from google.genai import types
+    GENAI_AVAILABLE = True
+except ImportError:
+    GENAI_AVAILABLE = False
+
 # ===== CONFIGURATION =====
 # Read tokens strictly from environment variables (.env file)
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 DISCORD_PRIVILEGED_INTENTS = os.getenv("DISCORD_PRIVILEGED_INTENTS", "true").lower() in ("true", "1", "yes")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+AI_MODEL = os.getenv("AI_MODEL", "gemini-1.5-flash")
+
+# ===== AI HELPER FUNCTIONS =====
+JARVIS_SYSTEM_INSTRUCTION = (
+    "You are J.A.R.V.I.S., a sophisticated, witty, intelligent, and impeccably polite AI assistant "
+    "(inspired by Tony Stark's J.A.R.V.I.S. in Iron Man). "
+    "You address the user with refined charm (occasionally using 'sir' or addressing them by name if provided). "
+    "Keep responses helpful, concise, well-structured, and formatted with markdown when appropriate."
+)
+
+def split_message(text: str, max_length: int = 2000) -> List[str]:
+    """Split long messages into chunks that fit within platform character limits."""
+    if len(text) <= max_length:
+        return [text]
+    chunks = []
+    lines = text.split("\n")
+    current_chunk = ""
+    for line in lines:
+        if len(current_chunk) + len(line) + 1 > max_length:
+            if current_chunk:
+                chunks.append(current_chunk.strip())
+                current_chunk = ""
+            while len(line) > max_length:
+                chunks.append(line[:max_length])
+                line = line[max_length:]
+            current_chunk = line + "\n"
+        else:
+            current_chunk += line + "\n"
+    if current_chunk.strip():
+        chunks.append(current_chunk.strip())
+    return chunks
+
+async def generate_ai_response(prompt: str, user_name: Optional[str] = None) -> str:
+    """Generate an AI response using Google Gemini with J.A.R.V.I.S. persona."""
+    if not GEMINI_API_KEY or GEMINI_API_KEY.strip() in ("", "your_gemini_api_key_here"):
+        return (
+            "⚠️ **Cognitive Systems Offline**: `GEMINI_API_KEY` is not configured.\n"
+            "Please set your Gemini API key in the `.env` file to enable my AI capabilities, sir.\n"
+            "*(You can get a free key at https://aistudio.google.com/)*"
+        )
+
+    user_tag = f"User ({user_name}): " if user_name else ""
+    full_prompt = f"{user_tag}{prompt}"
+
+    if GENAI_AVAILABLE:
+        try:
+            client = genai.Client(api_key=GEMINI_API_KEY)
+            response = await client.aio.models.generate_content(
+                model=AI_MODEL,
+                contents=full_prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=JARVIS_SYSTEM_INSTRUCTION,
+                    temperature=0.7,
+                )
+            )
+            if response.text:
+                return response.text.strip()
+            return "I processed your query, sir, but no response was generated."
+        except Exception:
+            # If genai client fails, try direct httpx fallback below
+            pass
+
+    # Direct httpx fallback
+    try:
+        import httpx
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{AI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+        payload = {
+            "system_instruction": {"parts": [{"text": JARVIS_SYSTEM_INSTRUCTION}]},
+            "contents": [{"parts": [{"text": full_prompt}]}]
+        }
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            res = await client.post(url, json=payload)
+            if res.status_code == 200:
+                data = res.json()
+                candidates = data.get("candidates", [])
+                if candidates:
+                    parts = candidates[0].get("content", {}).get("parts", [])
+                    if parts:
+                        return parts[0].get("text", "").strip()
+                return "I processed your query, sir, but no response was generated."
+            else:
+                return f"⚠️ My cognitive subsystems encountered an error ({res.status_code}): `{res.text[:200]}`"
+    except Exception as e:
+        return f"⚠️ An error occurred while communicating with my cognitive core: `{str(e)}`"
 
 # ===== TELEGRAM BOT FUNCTIONS =====
 if TELEGRAM_AVAILABLE:
@@ -44,6 +137,7 @@ if TELEGRAM_AVAILABLE:
             "Telegram commands:\n"
             "/start - Show this message\n"
             "/help - Get help\n"
+            "/ask <prompt> - Ask Jarvis AI anything\n"
             "/echo <text> - I'll repeat your text\n"
             "/ping - Check if I'm alive\n\n"
             "Discord commands work in your Discord server!"
@@ -54,10 +148,35 @@ if TELEGRAM_AVAILABLE:
             "📚 **Telegram Help**\n"
             "/start - Start the bot\n"
             "/help - Show this help\n"
+            "/ask <prompt> - Ask Jarvis AI anything\n"
+            "/ai <prompt> - Alias for /ask\n"
             "/echo <text> - Echo your message\n"
             "/ping - Pong! (latency test)\n"
-            "/info - Bot information"
+            "/info - Bot information\n\n"
+            "💡 You can also send me direct messages to chat with Jarvis AI!"
         )
+
+    async def telegram_ask(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        prompt = ' '.join(context.args) if context.args else ""
+        if not prompt:
+            await update.message.reply_text("Usage: /ask <your question or prompt>")
+            return
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+        user_name = update.effective_user.first_name if update.effective_user else "User"
+        reply = await generate_ai_response(prompt, user_name=user_name)
+        for chunk in split_message(reply, max_length=4000):
+            await update.message.reply_text(chunk)
+
+    async def telegram_direct_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Respond to private text messages in Telegram using AI."""
+        if not update.message or not update.message.text:
+            return
+        if update.effective_chat.type == "private":
+            await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+            user_name = update.effective_user.first_name if update.effective_user else "User"
+            reply = await generate_ai_response(update.message.text, user_name=user_name)
+            for chunk in split_message(reply, max_length=4000):
+                await update.message.reply_text(chunk)
 
     async def telegram_echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = ' '.join(context.args) if context.args else ""
@@ -114,6 +233,9 @@ if TELEGRAM_AVAILABLE:
             application.add_handler(CommandHandler("echo", telegram_echo))
             application.add_handler(CommandHandler("ping", telegram_ping))
             application.add_handler(CommandHandler("info", telegram_info))
+            application.add_handler(CommandHandler("ask", telegram_ask))
+            application.add_handler(CommandHandler("ai", telegram_ask))
+            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, telegram_direct_message))
             application.add_handler(MessageHandler(filters.COMMAND, telegram_unknown))
             
             # Register error handler to avoid unhandled exception spam
@@ -211,6 +333,28 @@ if DISCORD_AVAILABLE:
             await ctx.send(f"⚠️ An error occurred: {str(error)}")
             print(f"Discord error: {error}")
 
+    @bot.event
+    async def on_message(message: discord.Message):
+        if message.author.bot:
+            return
+
+        # Check if the bot was mentioned in the message
+        if bot.user and bot.user.mentioned_in(message) and not message.mention_everyone:
+            prompt = message.content
+            for mention in [f"<@{bot.user.id}>", f"<@!{bot.user.id}>"]:
+                prompt = prompt.replace(mention, "")
+            prompt = prompt.strip()
+
+            if prompt:
+                async with message.channel.typing():
+                    response = await generate_ai_response(prompt, user_name=message.author.display_name)
+                    chunks = split_message(response, max_length=1950)
+                    for chunk in chunks:
+                        await message.reply(chunk, mention_author=False)
+                return
+
+        await bot.process_commands(message)
+
     # ==================== GENERAL COMMANDS ====================
 
     @bot.hybrid_command(name='help', description="Show the Discord bot help menu")
@@ -219,6 +363,15 @@ if DISCORD_AVAILABLE:
             title="📚 Discord Bot Help Menu",
             description="All commands work with both `/command` (Slash) and `!command` (Prefix):",
             color=discord.Color.blue()
+        )
+        embed.add_field(
+            name="🧠 AI Assistant (J.A.R.V.I.S.)",
+            value=(
+                "`/ask <prompt>` or `!ask <prompt>` - Ask Jarvis AI anything\n"
+                "`/ai <prompt>` - Alias for `/ask`\n"
+                "`@Jarvis <prompt>` - Mention Jarvis anywhere to chat directly"
+            ),
+            inline=False
         )
         embed.add_field(
             name="🤖 General",
@@ -309,8 +462,23 @@ if DISCORD_AVAILABLE:
             status_text += "\n"
         status_text += "Telegram: Check your chat 💬\n"
         status_text += "Prefix: `/` (Slash) or `!`\n"
+        status_text += "AI Assistant: " + ("Online 🟢" if GEMINI_API_KEY else "Offline (Set GEMINI_API_KEY) ⚪") + "\n"
         status_text += "Use `/help` for commands"
         await ctx.send(status_text)
+
+    # ==================== AI ASSISTANT (J.A.R.V.I.S.) ====================
+
+    @bot.hybrid_command(name='ask', aliases=['ai'], description="Ask Jarvis AI anything")
+    async def discord_ask(ctx, *, prompt: str):
+        """Ask Jarvis AI anything.
+        Usage: /ask What is the speed of light?
+        """
+        await ctx.defer()
+        user_name = ctx.author.display_name
+        response = await generate_ai_response(prompt, user_name=user_name)
+        chunks = split_message(response, max_length=1950)
+        for chunk in chunks:
+            await ctx.send(chunk)
 
     # ==================== PRESENCE MANAGEMENT ====================
 
@@ -1014,6 +1182,9 @@ def main():
     print("\n📋 SETUP STATUS:")
     print(f"Telegram Library: {'✅ Installed' if TELEGRAM_AVAILABLE else '❌ Not installed'}")
     print(f"Discord Library:  {'✅ Installed' if DISCORD_AVAILABLE else '❌ Not installed'}")
+    print(f"Google GenAI:     {'✅ Installed' if GENAI_AVAILABLE else '⚠️ Not installed (using HTTP fallback)'}")
+    ai_configured = bool(GEMINI_API_KEY) and GEMINI_API_KEY != "your_gemini_api_key_here"
+    print(f"AI Assistant:     {'✅ Configured' if ai_configured else '⚠️ Not configured (set GEMINI_API_KEY in .env)'}")
     
     if not TELEGRAM_AVAILABLE and not DISCORD_AVAILABLE:
         print("\n🔧 TO INSTALL MISSING LIBRARIES:")

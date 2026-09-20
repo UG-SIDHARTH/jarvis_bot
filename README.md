@@ -6,6 +6,17 @@ A powerful, self-hosted bot that runs both **Telegram** and **Discord** bots con
 
 ## 🌟 Key Features
 
+### 🧠 AI Assistant (J.A.R.V.I.S.)
+- **Powered by Google Gemini**: Lightning-fast, intelligent, and refined conversational AI.
+- **Sophisticated Persona**: Inspired by Tony Stark's J.A.R.V.I.S.—helpful, witty, and polite.
+- **Discord AI Interaction**:
+  - `/ask <prompt>` (and `!ask <prompt>`) or `/ai <prompt>` — Ask anything via slash or prefix command.
+  - `@Jarvis <prompt>` — Mention Jarvis directly in any channel for an instant AI response.
+- **Telegram AI Interaction**:
+  - `/ask <prompt>` or `/ai <prompt>` — Ask questions in group or direct chats.
+  - Direct 1-on-1 private messages automatically routed to Jarvis AI.
+- **Smart Formatting & Chunking**: Automatic character limit management (2,000 for Discord, 4,096 for Telegram) and markdown preservation.
+
 ### 🎮 Discord Bot
 - **Hybrid Commands**: Every command works seamlessly as a Slash Command (`/command`) and as a Prefix Command (`!command`).
 - **Channel & Category Management**:
@@ -35,6 +46,7 @@ A powerful, self-hosted bot that runs both **Telegram** and **Discord** bots con
 - Supported commands:
   - `/start` — Welcome message and instructions.
   - `/help` — Overview of available commands.
+  - `/ask <prompt>` — Ask Jarvis AI anything.
   - `/echo <text>` — Echo input text.
   - `/ping` — Latency and responsiveness check.
   - `/info` — Bot runtime status.
@@ -50,6 +62,7 @@ A powerful, self-hosted bot that runs both **Telegram** and **Discord** bots con
 - Python 3.10 or higher
 - Telegram Bot Token (from [@BotFather](https://t.me/botfather))
 - Discord Bot Token (from [Discord Developer Portal](https://discord.com/developers/applications))
+- Google Gemini API Key (free from [Google AI Studio](https://aistudio.google.com/))
 
 ### 2. Installation
 
@@ -98,6 +111,11 @@ DISCORD_PRIVILEGED_INTENTS=true
 
 # Discord Client / Application ID (Optional, for Discord Rich Presence / RPC)
 DISCORD_CLIENT_ID=your_client_id_here
+
+# Google Gemini API Key (for Jarvis AI Assistant)
+# Get a free key at https://aistudio.google.com/
+GEMINI_API_KEY=your_gemini_api_key_here
+AI_MODEL=gemini-1.5-flash
 ```
 
 > [!IMPORTANT]
@@ -138,6 +156,9 @@ python discord_rpc.py
 
 | Command | Description | Required Permissions |
 | :--- | :--- | :--- |
+| `/ask <prompt>` or `!ask <prompt>` | Ask Jarvis AI anything | Everyone |
+| `/ai <prompt>` | Alias for `/ask` | Everyone |
+| `@Jarvis <prompt>` | Mention Jarvis anywhere to chat directly | Everyone |
 | `/help` or `!help` | Display interactive help menu | Everyone |
 | `/hello` or `!hello` | Friendly greeting | Everyone |
 | `/echo <text>` or `!echo <text>` | Echo a message | Everyone |
@@ -165,6 +186,9 @@ python discord_rpc.py
 | :--- | :--- |
 | `/start` | Start the bot and view welcome info |
 | `/help` | View available Telegram commands |
+| `/ask <prompt>` | Ask Jarvis AI anything |
+| `/ai <prompt>` | Alias for `/ask` |
+| Direct Message | Chat 1-on-1 with Jarvis AI directly in private chat |
 | `/echo <text>` | Repeat provided text |
 | `/ping` | Check bot responsiveness |
 | `/info` | View platform & bot status |
