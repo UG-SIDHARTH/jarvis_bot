@@ -5,7 +5,7 @@ import asyncio
 import threading
 import time
 import os
-from typing import Optional
+from typing import Optional, Union, List, Dict, Any
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -247,6 +247,7 @@ if DISCORD_AVAILABLE:
             name="📁 Channel Management (Requires Manage Channels)",
             value=(
                 "`/createchannel <name> [type] [category]` - Create a channel\n"
+                "`/createmultichannel <layout>` - Bulk create channels across categories\n"
                 "`/deletechannel [#channel]` - Delete a channel (defaults to current)\n"
                 "`/createcategory <name>` - Create a new category"
             ),
@@ -497,6 +498,261 @@ if DISCORD_AVAILABLE:
 
     # ==================== CHANNEL MANAGEMENT ====================
 
+    def parse_channel_layout_string(layout_str: str) -> List[Dict[str, Any]]:
+        """
+        Parse a string layout into category and channel specifications.
+        Format: "Category1: chan1, chan2, voice:vc1 | Category2: chan3, voice:vc2"
+        """
+        results = []
+        category_blocks = [b.strip() for b in layout_str.split('|') if b.strip()]
+        for block in category_blocks:
+            if ':' in block:
+                cat_name, channels_part = block.split(':', 1)
+            elif '>' in block:
+                cat_name, channels_part = block.split('>', 1)
+            else:
+                cat_name, channels_part = block, ""
+            cat_name = cat_name.strip()
+            channel_items = [ch.strip() for ch in channels_part.split(',') if ch.strip()]
+            channels = []
+            for ch in channel_items:
+                lower_ch = ch.lower()
+                if lower_ch.startswith("voice:"):
+                    channels.append({"name": ch[6:].strip(), "type": "voice"})
+                elif lower_ch.startswith("vc:"):
+                    channels.append({"name": ch[3:].strip(), "type": "voice"})
+                elif lower_ch.startswith("text:"):
+                    channels.append({"name": ch[5:].strip().lstrip('#'), "type": "text"})
+                else:
+                    channels.append({"name": ch.lstrip('#').strip(), "type": "text"})
+            results.append({"category": cat_name, "channels": channels})
+        return results
+
+    def normalize_channel_structure(structure: Union[str, Dict[str, Any], List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+        """
+        Normalizes various structure formats into:
+        [{"category": "Name", "channels": [{"name": "ch1", "type": "text"}, ...]}, ...]
+        """
+        if isinstance(structure, str):
+            return parse_channel_layout_string(structure)
+        normalized = []
+        if isinstance(structure, dict):
+            for cat_name, val in structure.items():
+                channels = []
+                if isinstance(val, list):
+                    for item in val:
+                        if isinstance(item, str):
+                            lower_item = item.lower()
+                            if lower_item.startswith("voice:"):
+                                channels.append({"name": item[6:].strip(), "type": "voice"})
+                            elif lower_item.startswith("vc:"):
+                                channels.append({"name": item[3:].strip(), "type": "voice"})
+                            elif lower_item.startswith("text:"):
+                                channels.append({"name": item[5:].strip().lstrip('#'), "type": "text"})
+                            else:
+                                channels.append({"name": item.lstrip('#').strip(), "type": "text"})
+                        elif isinstance(item, dict):
+                            channels.append({
+                                "name": item.get("name", "").strip(),
+                                "type": item.get("type", "text").lower()
+                            })
+                elif isinstance(val, dict):
+                    for text_ch in val.get("text", []):
+                        channels.append({"name": str(text_ch).lstrip('#').strip(), "type": "text"})
+                    for voice_ch in val.get("voice", []):
+                        channels.append({"name": str(voice_ch).strip(), "type": "voice"})
+                normalized.append({"category": str(cat_name).strip(), "channels": channels})
+        elif isinstance(structure, list):
+            for entry in structure:
+                if isinstance(entry, dict):
+                    cat_name = entry.get("category", "").strip()
+                    channels = []
+                    if "channels" in entry and isinstance(entry["channels"], list):
+                        for item in entry["channels"]:
+                            if isinstance(item, str):
+                                lower_item = item.lower()
+                                if lower_item.startswith("voice:"):
+                                    channels.append({"name": item[6:].strip(), "type": "voice"})
+                                elif lower_item.startswith("vc:"):
+                                    channels.append({"name": item[3:].strip(), "type": "voice"})
+                                else:
+                                    channels.append({"name": item.lstrip('#').strip(), "type": "text"})
+                            elif isinstance(item, dict):
+                                channels.append({
+                                    "name": item.get("name", "").strip(),
+                                    "type": item.get("type", "text").lower()
+                                })
+                    else:
+                        for text_ch in entry.get("text", []):
+                            channels.append({"name": str(text_ch).lstrip('#').strip(), "type": "text"})
+                        for voice_ch in entry.get("voice", []):
+                            channels.append({"name": str(voice_ch).strip(), "type": "voice"})
+                    normalized.append({"category": cat_name, "channels": channels})
+        return normalized
+
+    async def create_multiple_channels(
+        guild: discord.Guild,
+        structure: Union[str, Dict[str, Any], List[Dict[str, Any]]],
+        reason: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Creates multiple channels organized across categories in a Discord server.
+
+        Parameters:
+        - guild (discord.Guild): Target Discord server.
+        - structure (Union[str, dict, list]): Layout of categories and channels.
+            Formats supported:
+            1. Shorthand string: "Category1: ch1, voice:vc1 | Category2: ch2"
+            2. Dict with list: {"Category1": ["ch1", "voice:vc1"], "Category2": ["ch2"]}
+            3. Dict with type dict: {"Category1": {"text": ["ch1"], "voice": ["vc1"]}}
+            4. List of dicts: [{"category": "Category1", "text": ["ch1"], "voice": ["vc1"]}]
+        - reason (Optional[str]): Audit log reason.
+
+        Returns:
+            dict containing:
+            - categories_created: list of newly created CategoryChannel
+            - categories_reused: list of existing CategoryChannel reused
+            - channels_created: list of newly created TextChannel or VoiceChannel
+            - skipped: list of dicts for skipped existing channels
+            - errors: list of dicts for any errors encountered
+        """
+        audit_reason = reason or "Bulk channel creation"
+        categories_created = []
+        categories_reused = []
+        channels_created = []
+        skipped = []
+        errors = []
+
+        normalized = normalize_channel_structure(structure)
+
+        for cat_info in normalized:
+            cat_name = cat_info.get("category", "").strip()
+            channels = cat_info.get("channels", [])
+            category = None
+
+            if cat_name:
+                category = discord.utils.find(lambda c: c.name.lower() == cat_name.lower(), guild.categories)
+                if not category:
+                    try:
+                        category = await guild.create_category(name=cat_name, reason=audit_reason)
+                        categories_created.append(category)
+                        await asyncio.sleep(0.3)
+                    except Exception as e:
+                        errors.append({"target": f"Category '{cat_name}'", "error": str(e)})
+                        continue
+                else:
+                    if category not in categories_reused and category not in categories_created:
+                        categories_reused.append(category)
+
+            for ch_spec in channels:
+                ch_name = ch_spec.get("name", "").strip()
+                ch_type = ch_spec.get("type", "text").lower()
+                if not ch_name:
+                    continue
+
+                if ch_type in ["voice", "vc"]:
+                    existing_vc = None
+                    if category:
+                        existing_vc = discord.utils.find(lambda c: c.name.lower() == ch_name.lower(), category.voice_channels)
+                    else:
+                        existing_vc = discord.utils.find(lambda c: c.name.lower() == ch_name.lower() and c.category is None, guild.voice_channels)
+
+                    if existing_vc:
+                        skipped.append({
+                            "category": category.name if category else "None",
+                            "channel": ch_name,
+                            "type": "voice",
+                            "reason": "Voice channel already exists"
+                        })
+                    else:
+                        try:
+                            new_vc = await guild.create_voice_channel(name=ch_name, category=category, reason=audit_reason)
+                            channels_created.append(new_vc)
+                            await asyncio.sleep(0.3)
+                        except Exception as e:
+                            errors.append({"target": f"Voice channel '{ch_name}' in '{category.name if category else 'None'}'", "error": str(e)})
+
+                else:
+                    clean_ch_name = ch_name.lower().replace(" ", "-")
+                    existing_tc = None
+                    if category:
+                        existing_tc = discord.utils.find(lambda c: c.name.lower() == clean_ch_name, category.text_channels)
+                    else:
+                        existing_tc = discord.utils.find(lambda c: c.name.lower() == clean_ch_name and c.category is None, guild.text_channels)
+
+                    if existing_tc:
+                        skipped.append({
+                            "category": category.name if category else "None",
+                            "channel": clean_ch_name,
+                            "type": "text",
+                            "reason": "Text channel already exists"
+                        })
+                    else:
+                        try:
+                            new_tc = await guild.create_text_channel(name=clean_ch_name, category=category, reason=audit_reason)
+                            channels_created.append(new_tc)
+                            await asyncio.sleep(0.3)
+                        except Exception as e:
+                            errors.append({"target": f"Text channel '{clean_ch_name}' in '{category.name if category else 'None'}'", "error": str(e)})
+
+        return {
+            "categories_created": categories_created,
+            "categories_reused": categories_reused,
+            "channels_created": channels_created,
+            "skipped": skipped,
+            "errors": errors
+        }
+
+    @bot.hybrid_command(name='createmultichannel', description="Create multiple channels across different categories")
+    @commands.has_permissions(manage_channels=True)
+    @commands.bot_has_permissions(manage_channels=True)
+    async def discord_createmultichannel(ctx, *, layout: str):
+        """Create multiple channels across different categories at once.
+        Format: Category1: chan1, chan2, voice:vc1 | Category2: chan3, voice:vc2
+        Example: /createmultichannel layout: 💬 Community: general, memes | 🔊 Voice: voice:Lounge, voice:Gaming
+        """
+        await ctx.defer()
+        result = await create_multiple_channels(
+            guild=ctx.guild,
+            structure=layout,
+            reason=f"Created by {ctx.author}"
+        )
+
+        embed = discord.Embed(
+            title="📁 Bulk Channel Creation Report",
+            color=discord.Color.green() if not result["errors"] else discord.Color.gold()
+        )
+
+        cats_created_str = ", ".join(f"**{c.name}**" for c in result["categories_created"]) or "None"
+        embed.add_field(name="🆕 Categories Created", value=cats_created_str, inline=False)
+
+        if result["categories_reused"]:
+            cats_reused_str = ", ".join(f"**{c.name}**" for c in result["categories_reused"])
+            embed.add_field(name="♻️ Categories Reused", value=cats_reused_str, inline=False)
+
+        if result["channels_created"]:
+            ch_list = [f"{'🔊' if isinstance(ch, discord.VoiceChannel) else '💬'} {ch.mention}" for ch in result["channels_created"][:20]]
+            ch_text = ", ".join(ch_list)
+            if len(result["channels_created"]) > 20:
+                ch_text += f" ...and {len(result['channels_created']) - 20} more"
+            embed.add_field(name=f"✅ Channels Created ({len(result['channels_created'])})", value=ch_text, inline=False)
+        else:
+            embed.add_field(name="Channels Created", value="None", inline=False)
+
+        if result["skipped"]:
+            skip_list = [f"• `{s['channel']}` ({s['category']}): {s['reason']}" for s in result["skipped"][:10]]
+            skip_text = "\n".join(skip_list)
+            if len(result["skipped"]) > 10:
+                skip_text += f"\n...and {len(result['skipped']) - 10} more"
+            embed.add_field(name=f"⚠️ Skipped ({len(result['skipped'])})", value=skip_text, inline=False)
+
+        if result["errors"]:
+            err_list = [f"• {e['target']}: `{e['error']}`" for e in result["errors"][:5]]
+            embed.add_field(name="❌ Errors", value="\n".join(err_list), inline=False)
+
+        embed.set_footer(text=f"Requested by {ctx.author.display_name}")
+        await ctx.send(embed=embed)
+
     @bot.hybrid_command(name='createchannel', description="Create a text or voice channel")
     @commands.has_permissions(manage_channels=True)
     @commands.bot_has_permissions(manage_channels=True)
@@ -684,25 +940,8 @@ if DISCORD_AVAILABLE:
             }
         ]
 
-        rules_channel = None
-
-        for group in structure:
-            cat_name = group["category"]
-            category = discord.utils.get(guild.categories, name=cat_name)
-            if not category:
-                category = await guild.create_category(name=cat_name, reason="Automated Server Setup")
-
-            for t_name in group["text"]:
-                ch = discord.utils.get(guild.text_channels, name=t_name, category=category)
-                if not ch:
-                    ch = await guild.create_text_channel(name=t_name, category=category, reason="Automated Server Setup")
-                if t_name == "welcome-and-rules":
-                    rules_channel = ch
-
-            for v_name in group["voice"]:
-                vc = discord.utils.get(guild.voice_channels, name=v_name, category=category)
-                if not vc:
-                    await guild.create_voice_channel(name=v_name, category=category, reason="Automated Server Setup")
+        await create_multiple_channels(guild=guild, structure=structure, reason="Automated Server Setup")
+        rules_channel = discord.utils.get(guild.text_channels, name="welcome-and-rules")
 
         # 3. Post Rules in the rules channel if found
         if rules_channel:
