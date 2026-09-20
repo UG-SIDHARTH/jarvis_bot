@@ -14,6 +14,7 @@ load_dotenv()
 try:
     from telegram import Update
     from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+    import telegram.error
     TELEGRAM_AVAILABLE = True
 except ImportError:
     TELEGRAM_AVAILABLE = False
@@ -32,6 +33,7 @@ except ImportError:
 # Read tokens strictly from environment variables (.env file)
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+DISCORD_PRIVILEGED_INTENTS = os.getenv("DISCORD_PRIVILEGED_INTENTS", "true").lower() in ("true", "1", "yes")
 
 # ===== TELEGRAM BOT FUNCTIONS =====
 if TELEGRAM_AVAILABLE:
@@ -81,28 +83,57 @@ if TELEGRAM_AVAILABLE:
             "Note: Discord commands work in your Discord server!"
         )
 
+    async def telegram_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+        """Handle errors in Telegram bot and prevent infinite conflict loop."""
+        error = context.error
+        if isinstance(error, telegram.error.Conflict):
+            print("\n" + "=" * 60)
+            print("⚠️  [TELEGRAM CONFLICT DETECTED]")
+            print("   Terminated by another getUpdates request.")
+            print("   Make sure only ONE bot instance is running with this token!")
+            print("   Check for other Docker containers (`docker ps`) or local processes.")
+            print("=" * 60)
+            if context.application.updater and context.application.updater.running:
+                print("🛑 Stopping Telegram polling loop to prevent spamming the API...")
+                await context.application.updater.stop()
+        elif isinstance(error, telegram.error.NetworkError):
+            print(f"⚠️ Telegram network error: {error}")
+        else:
+            print(f"⚠️ Telegram error: {error}")
+
     def run_telegram_bot():
         """Run Telegram bot in separate thread"""
         print("🤖 Starting Telegram bot...")
-        application = Application.builder().token(TELEGRAM_TOKEN).build()
-        
-        # Add handlers
-        application.add_handler(CommandHandler("start", telegram_start))
-        application.add_handler(CommandHandler("help", telegram_help))
-        application.add_handler(CommandHandler("echo", telegram_echo))
-        application.add_handler(CommandHandler("ping", telegram_ping))
-        application.add_handler(CommandHandler("info", telegram_info))
-        application.add_handler(MessageHandler(filters.COMMAND, telegram_unknown))
-        
-        # Run the bot (stop_signals=None is required when running in a worker thread)
-        application.run_polling(stop_signals=None)
+        try:
+            application = Application.builder().token(TELEGRAM_TOKEN).build()
+            
+            # Add handlers
+            application.add_handler(CommandHandler("start", telegram_start))
+            application.add_handler(CommandHandler("help", telegram_help))
+            application.add_handler(CommandHandler("echo", telegram_echo))
+            application.add_handler(CommandHandler("ping", telegram_ping))
+            application.add_handler(CommandHandler("info", telegram_info))
+            application.add_handler(MessageHandler(filters.COMMAND, telegram_unknown))
+            
+            # Register error handler to avoid unhandled exception spam
+            application.add_error_handler(telegram_error_handler)
+            
+            # Run the bot (drop_pending_updates flushes queued updates from old runs)
+            application.run_polling(drop_pending_updates=True, stop_signals=None)
+        except Exception as e:
+            print(f"❌ Telegram bot crashed: {e}")
         print("✅ Telegram bot stopped")
 
 # ===== DISCORD BOT FUNCTIONS =====
 if DISCORD_AVAILABLE:
     intents = discord.Intents.default()
-    intents.message_content = True  # Required to read message content
-    intents.members = True          # Required for role assignment and member management
+    if DISCORD_PRIVILEGED_INTENTS:
+        intents.message_content = True  # Required to read message content for prefix commands
+        intents.members = True          # Required for role assignment and member management
+    else:
+        print("ℹ️  Discord privileged intents disabled (DISCORD_PRIVILEGED_INTENTS=false).")
+        print("   Prefix commands (!help, !ping) in servers will require mentioning the bot.")
+
     bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 
     # --- Interactive Self-Role UI Components ---
@@ -140,7 +171,12 @@ if DISCORD_AVAILABLE:
     async def on_ready():
         print(f'🤖 Discord bot logged in as {bot.user} (ID: {bot.user.id})')
         print('------')
-        activity = discord.Game(name="Customizing servers | !help")
+        # Default Rich Presence: Competing in Competitive (Playing Solo)
+        activity = discord.Activity(
+            type=discord.ActivityType.competing,
+            name="Competitive",
+            state="Playing Solo"
+        )
         await bot.change_presence(activity=activity)
 
     @bot.event
@@ -217,6 +253,14 @@ if DISCORD_AVAILABLE:
             ),
             inline=False
         )
+        embed.add_field(
+            name="🎮 Presence Management (Requires Admin)",
+            value=(
+                "`!setpresence <type> <name> [| state]` - Set custom bot activity\n"
+                "`!resetpresence` - Reset activity to Competitive (Playing Solo)"
+            ),
+            inline=False
+        )
         embed.set_footer(text="Tip: Ensure the bot's role is positioned high in Server Settings > Roles!")
         await ctx.send(embed=embed)
 
@@ -246,10 +290,72 @@ if DISCORD_AVAILABLE:
     async def discord_status(ctx):
         status_text = "✅ **Bot Status**\n"
         status_text += "Discord: Online 🟢\n"
+        if bot.activity:
+            act_type = bot.activity.type.name.capitalize()
+            act_name = getattr(bot.activity, "name", "")
+            act_state = getattr(bot.activity, "state", "")
+            status_text += f"Activity: {act_type} {act_name}"
+            if act_state:
+                status_text += f" ({act_state})"
+            status_text += "\n"
         status_text += "Telegram: Check your chat 💬\n"
         status_text += "Prefix: `!`\n"
         status_text += "Use `!help` for commands"
         await ctx.send(status_text)
+
+    # ==================== PRESENCE MANAGEMENT ====================
+
+    @bot.command(name='setpresence')
+    @commands.has_permissions(administrator=True)
+    async def discord_setpresence(ctx, activity_type: str, *, text: str):
+        """
+        Dynamically update bot presence.
+        Usage:
+          !setpresence competing Competitive | Playing Solo
+          !setpresence playing Overwatch 2
+          !setpresence watching Tournaments
+          !setpresence listening Chill Beats
+        """
+        parts = [p.strip() for p in text.split('|', 1)]
+        name = parts[0]
+        state = parts[1] if len(parts) > 1 else None
+
+        type_map = {
+            'playing': discord.ActivityType.playing,
+            'streaming': discord.ActivityType.streaming,
+            'listening': discord.ActivityType.listening,
+            'watching': discord.ActivityType.watching,
+            'competing': discord.ActivityType.competing,
+            'custom': discord.ActivityType.custom,
+        }
+
+        act_type = type_map.get(activity_type.lower())
+        if act_type is None:
+            valid = ", ".join(f"`{k}`" for k in type_map.keys())
+            await ctx.send(f"❌ Invalid activity type. Valid types: {valid}")
+            return
+
+        activity = discord.Activity(type=act_type, name=name, state=state)
+        await bot.change_presence(activity=activity)
+
+        embed = discord.Embed(title="🎮 Presence Updated", color=discord.Color.green())
+        embed.add_field(name="Type", value=activity_type.capitalize(), inline=True)
+        embed.add_field(name="Name", value=name, inline=True)
+        if state:
+            embed.add_field(name="State", value=state, inline=True)
+        await ctx.send(embed=embed)
+
+    @bot.command(name='resetpresence')
+    @commands.has_permissions(administrator=True)
+    async def discord_resetpresence(ctx):
+        """Reset bot presence to default (Competitive | Playing Solo)."""
+        activity = discord.Activity(
+            type=discord.ActivityType.competing,
+            name="Competitive",
+            state="Playing Solo"
+        )
+        await bot.change_presence(activity=activity)
+        await ctx.send("✅ Presence reset to default: **Competing in Competitive (Playing Solo)**.")
 
     # ==================== ROLE MANAGEMENT ====================
 
@@ -617,7 +723,28 @@ if DISCORD_AVAILABLE:
     def run_discord_bot():
         """Run Discord bot in separate thread"""
         print("🤖 Starting Discord bot...")
-        bot.run(DISCORD_TOKEN)
+        try:
+            bot.run(DISCORD_TOKEN)
+        except discord.errors.PrivilegedIntentsRequired:
+            print("\n" + "=" * 60)
+            print("❌ DISCORD ERROR: Privileged Intents Not Enabled!")
+            print("=" * 60)
+            print("Your bot is configured to use Privileged Gateway Intents (Message Content & Server Members),")
+            print("but they have not been enabled in the Discord Developer Portal.")
+            print("\nTo fix this:")
+            print("  1. Visit: https://discord.com/developers/applications")
+            print("  2. Select your bot application -> Click 'Bot' in the left menu")
+            print("  3. Scroll down to 'Privileged Gateway Intents'")
+            print("  4. Enable:")
+            print("     • MESSAGE CONTENT INTENT")
+            print("     • SERVER MEMBERS INTENT")
+            print("  5. Click 'Save Changes'")
+            print("\nAlternatively, set DISCORD_PRIVILEGED_INTENTS=false in your .env to run without them.")
+            print("=" * 60 + "\n")
+        except discord.errors.LoginFailure:
+            print("❌ DISCORD ERROR: Improper or invalid token passed. Check DISCORD_TOKEN in .env.")
+        except Exception as e:
+            print(f"❌ Discord bot error: {e}")
         print("✅ Discord bot stopped")
 
 # ===== MAIN EXECUTION =====
