@@ -6,16 +6,69 @@ A powerful, self-hosted bot that runs both **Telegram** and **Discord** bots con
 
 ## 🌟 Key Features
 
-### 🧠 AI Assistant (J.A.R.V.I.S.)
+### 🧠 AI Assistant (J.A.R.V.I.S.) — [Admin Only]
+- **Admin-Only Access**: J.A.R.V.I.S. AI cognitive systems are strictly reserved for Server Administrators and Bot Owners. Normal users attempting to interact with the AI receive an access denied notice.
 - **Powered by Google Gemini**: Lightning-fast, intelligent, and refined conversational AI.
 - **Sophisticated Persona**: Inspired by Tony Stark's J.A.R.V.I.S.—helpful, witty, and polite.
-- **Discord AI Interaction**:
-  - `/ask <prompt>` (and `!ask <prompt>`) or `/ai <prompt>` — Ask anything via slash or prefix command.
-  - `@Jarvis <prompt>` — Mention Jarvis directly in any channel for an instant AI response.
-- **Telegram AI Interaction**:
+- **Multi-Turn Conversation Memory**: Retains the last 10 messages of conversation context so you can have natural follow-up conversations without repeating details. Use `/reset` anytime to start fresh.
+- **Image & Vision Support (Multimodal)**: Upload screenshots, images (PNG, JPEG, WEBP, GIF), or code snippets alongside your prompt. Jarvis will analyze, explain, or debug them.
+- **Discord AI Interactions (Admin Only)**:
+  - `/ask <prompt> [image]` (and `!ask`) or `/ai` — Ask questions with optional image attachments.
+  - `/reset` — Clear conversation memory.
+  - `@Jarvis <prompt>` — Mention Jarvis anywhere (with or without images) for an instant response.
+  - **Discord DM Auto-Chat**: Send private 1-on-1 messages or images directly to Jarvis on Discord—no commands needed! (Requires user to be an administrator in a mutual server).
+  - **Right-Click App Command**: Right-click any message anywhere on Discord -> Apps -> **"Explain with Jarvis"** to summarize, explain, or debug messages.
+- **Telegram AI Interactions**:
   - `/ask <prompt>` or `/ai <prompt>` — Ask questions in group or direct chats.
-  - Direct 1-on-1 private messages automatically routed to Jarvis AI.
-- **Smart Formatting & Chunking**: Automatic character limit management (2,000 for Discord, 4,096 for Telegram) and markdown preservation.
+  - `/reset` — Clear conversation memory.
+  - **Photos**: Send or forward photos with captions directly for vision analysis.
+  - **Direct Messages**: 1-on-1 private messages are automatically routed to Jarvis AI.
+- **Smart Formatting & Chunking**: Automatic character limit management (2,000 for Discord, 4,096 for Telegram) with markdown preservation.
+- **AI Rate Limiting**:
+  - Protects your Gemini API quota from spam and abuse.
+  - Applies to `/ask`, `@Jarvis` server mentions, right-click app commands, and private DMs.
+
+### 🏆 Leveling & XP System (Discord)
+- **Separate Text & Voice Tracking**:
+  - **Text XP**: Earn 15–25 XP per message (with a 60-second cooldown to discourage spam).
+  - **Voice XP**: Earn 10 XP per minute spent actively in voice channels (AFK and deafened members are excluded).
+- **Embedded Rank Cards (`/rank`)**:
+  - Displays user avatar, Text LVL, Text Rank, Voice LVL, Voice Rank, total XP, and graphical progress bars (`[████████░░░░]`).
+- **Server Leaderboards (`/leaderboard`)**:
+  - Top 10 users per page with medals (🥇, 🥈, 🥉) and pagination (`/leaderboard [page]`).
+  - Sort by total XP, text XP, or voice XP (`/leaderboard page:1 sort_by:voice`).
+- **Automated Level Up Announcements**:
+  - Automatically announces when a member levels up with a festive celebration card (`🎉 Level Up! @User has reached level X!`).
+- **Persistent SQLite Storage**: Zero-setup local `levels.db` database.
+
+### 🛡️ AutoMod & Moderation System
+- **Automated Rules & Filters**:
+  - **Anti-Caps**: Detects messages with $\ge 70\%$ uppercase characters (messages $\ge 8$ characters).
+  - **Anti-Invites**: Blocks unauthorized Discord invite links (`discord.gg/...`, `discord.com/invite/...`).
+  - **Mass Mentions**: Prevents ping spam ($> 4$ mentions per message).
+  - **Anti-Spam**: Flags rapid message spam ($> 4$ messages in 3 seconds).
+  - **Bad Words / Profanity**: Filters toxic language and profanities using word-boundary matching (prevents false positives on words like "classic").
+- **Graduated Strike Sanctions**:
+  - **Strikes 1–2**: Warning alert DM (`⚠️ AutoMod Alert: Warn`).
+  - **Strikes 3–4**: **10-Minute Timeout** applied immediately with DM alert (`⚠️ AutoMod Alert: Timeout`).
+  - **Strike 5**: **24-Hour Temporary Ban** applied with DM alert (`⛔ AutoMod Alert: Temporary Ban`).
+  - **Auto-Unban Loop**: Background worker automatically unbans members when their temporary ban expires.
+  - **Admin Cancel Controls**: Administrators can cancel or reverse any punishment at any time using `/untimeout`, `/unban`, or `/clearstrikes`.
+- **Direct Message (DM) Alerts**:
+  - Offending users immediately receive an AutoMod alert embed via DM matching modern moderation bots (`⚠️ AutoMod Alert: Warn`, server name, `Violation: <Rule>`).
+- **Channel Cleanup & Mod-Logging**:
+  - Removes offending messages instantly and leaves a 5-second self-deleting notice.
+  - Automatically sends detailed incident alerts to `#mod-logs` or your designated logging channel (`/setmodlog`).
+- **Staff Exemption & Moderation Commands**:
+  - Administrators and moderators bypass all AutoMod filters.
+  - `/warn @user [reason]` — Manually issue a warning with the same alert DM sent to the member.
+  - `/warnings [@user]` — View warning history for a user or server.
+  - `/strikes [@user]` — View strike count, active punishment tier, and warning history.
+  - `/untimeout @user [reason]` — Cancel an active timeout.
+  - `/unban <user_id> [reason]` — Cancel a temporary or permanent ban.
+  - `/clearstrikes @user` — Reset and clear all strikes for a member.
+  - `/automod [rule] [enabled]` — View or toggle AutoMod filter rules (`anticaps`, `antiinvites`, `massmentions`, `antispam`, `badwords`).
+  - `/badwords <add|remove|list> [word]` — Manage custom server bad words blacklist.
 
 ### 🎮 Discord Bot
 - **Hybrid Commands**: Every command works seamlessly as a Slash Command (`/command`) and as a Prefix Command (`!command`).
@@ -156,9 +209,14 @@ python discord_rpc.py
 
 | Command | Description | Required Permissions |
 | :--- | :--- | :--- |
-| `/ask <prompt>` or `!ask <prompt>` | Ask Jarvis AI anything | Everyone |
-| `/ai <prompt>` | Alias for `/ask` | Everyone |
-| `@Jarvis <prompt>` | Mention Jarvis anywhere to chat directly | Everyone |
+| `/ask <prompt> [image]` or `!ask` | Ask Jarvis AI anything (supports vision & multi-turn memory) | Administrator |
+| `/ai <prompt>` | Alias for `/ask` | Administrator |
+| `/reset` | Clear conversation memory with Jarvis | Administrator |
+| `@Jarvis <prompt>` | Mention Jarvis anywhere (supports attachments) to chat directly | Administrator |
+| Direct Message (DM) | Chat 1-on-1 with Jarvis in private DMs (no commands needed) | Administrator |
+| Apps > Explain with Jarvis | Right-click any message to summarize or explain it | Administrator |
+| `/rank [@user]` | View Text & Voice rank, level, and progress bar card | Everyone |
+| `/leaderboard [page] [sort_by]` | View server XP rankings with medals (🥇🥈🥉) | Everyone |
 | `/help` or `!help` | Display interactive help menu | Everyone |
 | `/hello` or `!hello` | Friendly greeting | Everyone |
 | `/echo <text>` or `!echo <text>` | Echo a message | Everyone |
@@ -176,7 +234,18 @@ python discord_rpc.py
 | `/createcategory <name>` | Create a category | Manage Channels |
 | `/rules [#channel]` | Post official server rules embed | Administrator |
 | `/postrules <Title> \| <Rule 1>...` | Post custom formatted rules | Administrator |
+| `/warn @user [reason]` | Warn a member and send an AutoMod alert DM | Manage Messages |
+| `/warnings [@user]` | View warning history for a user or server | Manage Messages |
+| `/strikes [@user]` | View member strike count and current sanction tier | Manage Messages |
+| `/untimeout @user [reason]` | Cancel and remove an active timeout | Moderate Members |
+| `/unban <user_id> [reason]` | Cancel and reverse a ban | Ban Members |
+| `/clearstrikes @user` | Reset and clear all strikes for a member | Administrator |
+| `/automod [rule] [enabled]` | View or toggle AutoMod filter rules | Administrator |
+| `/badwords <action> [word]` | Add, remove, or list custom server bad words | Administrator |
+| `/setmodlog [#channel]` | Set designated mod-log channel for alerts | Administrator |
 | `/setup_server` | Automated 1-click server setup | Administrator |
+| `/setwelcome [#channel]` | Set welcome channel for new member greetings | Administrator |
+| `/testwelcome [@user]` | Preview the welcome greeting embed | Administrator |
 | `/setpresence <type> <name> [\| state]` | Update bot activity dynamically | Administrator |
 | `/resetpresence` | Reset bot activity to default | Administrator |
 
@@ -186,9 +255,11 @@ python discord_rpc.py
 | :--- | :--- |
 | `/start` | Start the bot and view welcome info |
 | `/help` | View available Telegram commands |
-| `/ask <prompt>` | Ask Jarvis AI anything |
+| `/ask <prompt>` | Ask Jarvis AI anything (with multi-turn memory) |
 | `/ai <prompt>` | Alias for `/ask` |
+| `/reset` | Clear conversation memory with Jarvis |
 | Direct Message | Chat 1-on-1 with Jarvis AI directly in private chat |
+| Send Photo | Send or forward photos with captions for visual analysis |
 | `/echo <text>` | Repeat provided text |
 | `/ping` | Check bot responsiveness |
 | `/info` | View platform & bot status |
