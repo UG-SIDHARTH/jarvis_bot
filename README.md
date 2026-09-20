@@ -115,7 +115,7 @@ DISCORD_CLIENT_ID=your_client_id_here
 # Google Gemini API Key (for Jarvis AI Assistant)
 # Get a free key at https://aistudio.google.com/
 GEMINI_API_KEY=your_gemini_api_key_here
-AI_MODEL=gemini-1.5-flash
+AI_MODEL=gemini-2.5-flash
 ```
 
 > [!IMPORTANT]

@@ -44,7 +44,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 DISCORD_PRIVILEGED_INTENTS = os.getenv("DISCORD_PRIVILEGED_INTENTS", "true").lower() in ("true", "1", "yes")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-AI_MODEL = os.getenv("AI_MODEL", "gemini-1.5-flash")
+AI_MODEL = os.getenv("AI_MODEL", "gemini-2.5-flash")
 
 # ===== AI HELPER FUNCTIONS =====
 JARVIS_SYSTEM_INSTRUCTION = (
@@ -77,7 +77,7 @@ def split_message(text: str, max_length: int = 2000) -> List[str]:
     return chunks
 
 async def generate_ai_response(prompt: str, user_name: Optional[str] = None) -> str:
-    """Generate an AI response using Google Gemini with J.A.R.V.I.S. persona."""
+    """Generate an AI response using Google Gemini with J.A.R.V.I.S. persona and automatic model fallback."""
     if not GEMINI_API_KEY or GEMINI_API_KEY.strip() in ("", "your_gemini_api_key_here"):
         return (
             "⚠️ **Cognitive Systems Offline**: `GEMINI_API_KEY` is not configured.\n"
@@ -88,46 +88,69 @@ async def generate_ai_response(prompt: str, user_name: Optional[str] = None) -> 
     user_tag = f"User ({user_name}): " if user_name else ""
     full_prompt = f"{user_tag}{prompt}"
 
-    if GENAI_AVAILABLE:
-        try:
-            client = genai.Client(api_key=GEMINI_API_KEY)
-            response = await client.aio.models.generate_content(
-                model=AI_MODEL,
-                contents=full_prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=JARVIS_SYSTEM_INSTRUCTION,
-                    temperature=0.7,
-                )
-            )
-            if response.text:
-                return response.text.strip()
-            return "I processed your query, sir, but no response was generated."
-        except Exception:
-            # If genai client fails, try direct httpx fallback below
-            pass
+    # Build prioritized candidate model list with automatic fallbacks
+    candidate_models = []
+    for m in [AI_MODEL, "gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-flash-latest"]:
+        if m and m not in candidate_models:
+            candidate_models.append(m)
 
-    # Direct httpx fallback
-    try:
-        import httpx
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{AI_MODEL}:generateContent?key={GEMINI_API_KEY}"
-        payload = {
-            "system_instruction": {"parts": [{"text": JARVIS_SYSTEM_INSTRUCTION}]},
-            "contents": [{"parts": [{"text": full_prompt}]}]
-        }
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            res = await client.post(url, json=payload)
-            if res.status_code == 200:
-                data = res.json()
-                candidates = data.get("candidates", [])
-                if candidates:
-                    parts = candidates[0].get("content", {}).get("parts", [])
-                    if parts:
-                        return parts[0].get("text", "").strip()
-                return "I processed your query, sir, but no response was generated."
-            else:
-                return f"⚠️ My cognitive subsystems encountered an error ({res.status_code}): `{res.text[:200]}`"
-    except Exception as e:
-        return f"⚠️ An error occurred while communicating with my cognitive core: `{str(e)}`"
+    last_error = None
+
+    for model_name in candidate_models:
+        clean_name = model_name.replace("models/", "").strip()
+
+        # 1. Try official google-genai client
+        if GENAI_AVAILABLE:
+            try:
+                client = genai.Client(api_key=GEMINI_API_KEY)
+                response = await client.aio.models.generate_content(
+                    model=clean_name,
+                    contents=full_prompt,
+                    config=types.GenerateContentConfig(
+                        system_instruction=JARVIS_SYSTEM_INSTRUCTION,
+                        temperature=0.7,
+                    )
+                )
+                if response.text:
+                    return response.text.strip()
+            except Exception as e:
+                err_msg = str(e)
+                last_error = err_msg
+                # If model is deprecated / not found / 404, continue to next candidate
+                if "404" in err_msg or "not found" in err_msg.lower():
+                    continue
+
+        # 2. Try direct HTTP fallback via httpx
+        try:
+            import httpx
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{clean_name}:generateContent?key={GEMINI_API_KEY}"
+            payload = {
+                "system_instruction": {"parts": [{"text": JARVIS_SYSTEM_INSTRUCTION}]},
+                "contents": [{"parts": [{"text": full_prompt}]}]
+            }
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                res = await client.post(url, json=payload)
+                if res.status_code == 200:
+                    data = res.json()
+                    candidates = data.get("candidates", [])
+                    if candidates:
+                        parts = candidates[0].get("content", {}).get("parts", [])
+                        if parts:
+                            return parts[0].get("text", "").strip()
+                    return "I processed your query, sir, but no response was generated."
+                elif res.status_code == 404:
+                    last_error = f"Model '{clean_name}' not found (404)"
+                    continue
+                else:
+                    return f"⚠️ My cognitive subsystems encountered an error ({res.status_code}): `{res.text[:200]}`"
+        except Exception as e:
+            last_error = str(e)
+            continue
+
+    return (
+        f"⚠️ My cognitive subsystems encountered an error: `{last_error or 'No supported model found'}`.\n"
+        "Please check your `GEMINI_API_KEY` or ensure `AI_MODEL=gemini-2.5-flash` is set in `.env`."
+    )
 
 # ===== TELEGRAM BOT FUNCTIONS =====
 if TELEGRAM_AVAILABLE:
