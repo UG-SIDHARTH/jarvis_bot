@@ -81,6 +81,7 @@ A powerful, self-hosted bot that runs both **Telegram** and **Discord** bots con
   - Programmatic `create_multiple_channels()` Python function supporting shorthand strings, simple dicts, nested dicts, and list formats.
   - Automatic duplicate prevention and rate limit protection.
 - **Role Management**:
+  - `/claimrole @role [options]` — Create an embed with a persistent 1-click button for members to claim a role (survives bot restarts).
   - `/giverole @user <role>` & `/removerole @user <role>` — Assign or remove roles with hierarchy checks.
   - `/createrole <name> [color]` — Create roles with optional hex color codes (e.g. `#ff0000`).
   - `/roles` — List all server roles and member counts.
@@ -227,6 +228,7 @@ python discord_rpc.py
 | `/removerole @user <role>` | Remove a role from a member | Manage Roles |
 | `/createrole <name> [color]` | Create a new role with optional hex color | Manage Roles |
 | `/roles` | List all server roles and member counts | Everyone |
+| `/claimrole @role [options]` | Create a 1-click button embed for members to claim a role | Manage Roles |
 | `/rolemenu <title> @role1 [@role2...]` | Create self-assignable role buttons | Manage Roles |
 | `/createchannel <name> [type] [category]` | Create a text or voice channel | Manage Channels |
 | `/createmultichannel <layout>` | Bulk create channels across categories | Manage Channels |

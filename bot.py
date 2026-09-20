@@ -10,7 +10,7 @@ import sqlite3
 import random
 import re
 import datetime
-from typing import Optional, Union, List, Dict, Any, Tuple
+from typing import Optional, Union, List, Dict, Any, Tuple, Set
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -962,6 +962,88 @@ if DISCORD_AVAILABLE:
             for role in roles[:25]:  # Discord limit: max 25 components
                 self.add_item(SelfRoleButton(role))
 
+    class ClaimRoleButton(discord.ui.DynamicItem[discord.ui.Button], template=r'claim_role:(?P<role_id>[0-9]+):(?P<toggle>[01])'):
+        """Persistent 1-click button for members to claim a role, surviving bot restarts."""
+        def __init__(
+            self,
+            role_id: int,
+            toggle: bool = False,
+            label: str = "Claim Role",
+            style: discord.ButtonStyle = discord.ButtonStyle.success,
+            emoji: Optional[str] = "✅"
+        ):
+            self.role_id = role_id
+            self.toggle = toggle
+            super().__init__(
+                discord.ui.Button(
+                    label=label,
+                    style=style,
+                    emoji=emoji,
+                    custom_id=f"claim_role:{role_id}:{1 if toggle else 0}"
+                )
+            )
+
+        @classmethod
+        async def from_custom_id(cls, interaction: discord.Interaction, item: discord.ui.Button, match: re.Match[str], /):
+            role_id = int(match.group('role_id'))
+            toggle = bool(int(match.group('toggle')))
+            return cls(role_id, toggle, label=item.label or "Claim Role", style=item.style or discord.ButtonStyle.success, emoji=item.emoji)
+
+        async def callback(self, interaction: discord.Interaction):
+            if not interaction.guild:
+                await interaction.response.send_message("❌ This button can only be used within a server.", ephemeral=True)
+                return
+
+            role = interaction.guild.get_role(self.role_id)
+            if not role:
+                await interaction.response.send_message("❌ This role no longer exists in the server.", ephemeral=True)
+                return
+
+            if role >= interaction.guild.me.top_role:
+                await interaction.response.send_message(
+                    "⚠️ I cannot assign this role because it is higher than or equal to my highest role in Server Settings > Roles!",
+                    ephemeral=True
+                )
+                return
+
+            member = interaction.user
+            if not isinstance(member, discord.Member):
+                member = interaction.guild.get_member(interaction.user.id)
+
+            if not member:
+                await interaction.response.send_message("❌ Could not retrieve your member profile.", ephemeral=True)
+                return
+
+            if role in member.roles:
+                if self.toggle:
+                    try:
+                        await member.remove_roles(role, reason="Claim Role button toggle (removed)")
+                        await interaction.response.send_message(
+                            f"➖ Removed **{role.name}** from you, {member.mention}.",
+                            ephemeral=True
+                        )
+                    except discord.Forbidden:
+                        await interaction.response.send_message("⚠️ I don't have permission to remove this role.", ephemeral=True)
+                else:
+                    await interaction.response.send_message(
+                        f"ℹ️ You already have the **{role.name}** role, {member.mention}!",
+                        ephemeral=True
+                    )
+            else:
+                try:
+                    await member.add_roles(role, reason="Claim Role button (granted)")
+                    await interaction.response.send_message(
+                        f"🎉 **Success**: You have been granted the **{role.name}** role, {member.mention}!",
+                        ephemeral=True
+                    )
+                except discord.Forbidden:
+                    await interaction.response.send_message(
+                        "⚠️ I don't have permission to assign this role. Please ensure my bot role is higher than this role in Server Settings > Roles.",
+                        ephemeral=True
+                    )
+
+    bot.add_dynamic_items(ClaimRoleButton)
+
     @tasks.loop(minutes=1)
     async def voice_xp_updater():
         """Award voice XP every minute to active members in voice channels."""
@@ -1459,6 +1541,7 @@ if DISCORD_AVAILABLE:
                 "`/removerole @user <role>` - Remove a role from a member\n"
                 "`/createrole <name> [color]` - Create a new role (e.g. `/createrole Gamer #ff0000`)\n"
                 "`/roles` - List all server roles and member counts\n"
+                "`/claimrole @role [options]` - Create a 1-click button embed for members to claim a role\n"
                 "`/rolemenu <title> <@role1> [@role2...]` - Create an interactive self-role button panel"
             ),
             inline=False
@@ -2246,6 +2329,97 @@ if DISCORD_AVAILABLE:
         )
         embed.set_footer(text="Click once to get the role, click again to remove it.")
         await ctx.send(embed=embed, view=view)
+
+    @bot.hybrid_command(
+        name='claimrole',
+        aliases=['rolebutton', 'buttonrole'],
+        description="Create an interactive 1-click button for members to claim a role"
+    )
+    @app_commands.describe(
+        role="The role to give when clicked",
+        title="Custom title for the embed card",
+        description="Custom message describing the role",
+        button_label="Label text on the button",
+        button_color="Color style: green, blue, grey, red (default: green)",
+        emoji="Emoji to display on the button (e.g. ✅, 🔗, ⭐)",
+        toggle="Allow clicking again to remove role (default: False)",
+        channel="Channel to post into (defaults to current channel)"
+    )
+    @app_commands.choices(button_color=[
+        app_commands.Choice(name="Green (Success)", value="green"),
+        app_commands.Choice(name="Blue (Primary)", value="blue"),
+        app_commands.Choice(name="Grey (Secondary)", value="grey"),
+        app_commands.Choice(name="Red (Danger)", value="red"),
+    ])
+    @commands.has_permissions(manage_roles=True)
+    @commands.bot_has_permissions(manage_roles=True)
+    async def discord_claimrole(
+        ctx,
+        role: discord.Role,
+        title: Optional[str] = None,
+        description: Optional[str] = None,
+        button_label: Optional[str] = None,
+        button_color: str = "green",
+        emoji: Optional[str] = "✅",
+        toggle: bool = False,
+        channel: Optional[discord.TextChannel] = None
+    ):
+        """Create a clickable button embed to give users a role when clicked.
+        Usage:
+          /claimrole @Member
+          /claimrole role:@VIP title:"VIP Access" description:"Click to claim your VIP access!" button_label:"Claim VIP" emoji:⭐ button_color:green
+        """
+        if not ctx.guild:
+            await ctx.send("❌ This command can only be used within a server.")
+            return
+
+        if role >= ctx.guild.me.top_role:
+            await ctx.send("❌ I cannot assign that role because it is higher than or equal to my highest role in Server Settings > Roles!")
+            return
+
+        if role >= ctx.author.top_role and ctx.author != ctx.guild.owner:
+            await ctx.send("❌ You cannot assign a role that is higher than or equal to your own highest role!")
+            return
+
+        target_channel = channel or ctx.channel
+
+        color_map = {
+            "green": discord.ButtonStyle.success,
+            "blue": discord.ButtonStyle.primary,
+            "grey": discord.ButtonStyle.secondary,
+            "gray": discord.ButtonStyle.secondary,
+            "red": discord.ButtonStyle.danger
+        }
+        btn_style = color_map.get(button_color.lower(), discord.ButtonStyle.success)
+
+        clean_emoji = emoji.strip() if emoji and emoji.strip() else None
+
+        btn = ClaimRoleButton(
+            role_id=role.id,
+            toggle=toggle,
+            label=button_label or f"Claim {role.name}",
+            style=btn_style,
+            emoji=clean_emoji
+        )
+
+        view = discord.ui.View(timeout=None)
+        view.add_item(btn)
+
+        embed = discord.Embed(
+            title=f"🎭 {title or f'Claim Role: {role.name}'}",
+            description=description or f"Click the button below to receive the **{role.name}** role!",
+            color=role.color if role.color.value != 0 else discord.Color.green()
+        )
+        footer_text = f"Role: {role.name} • Click the button below"
+        if toggle:
+            footer_text += " (Click again to remove)"
+        embed.set_footer(text=footer_text)
+
+        if target_channel != ctx.channel:
+            await target_channel.send(embed=embed, view=view)
+            await ctx.send(f"✅ Claim role button successfully posted in {target_channel.mention}!", ephemeral=True)
+        else:
+            await ctx.send(embed=embed, view=view)
 
     # ==================== CHANNEL MANAGEMENT ====================
 
