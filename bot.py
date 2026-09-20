@@ -25,6 +25,7 @@ except ImportError:
 try:
     import discord
     from discord.ext import commands
+    from discord import app_commands
     DISCORD_AVAILABLE = True
 except ImportError:
     DISCORD_AVAILABLE = False
@@ -381,6 +382,8 @@ if DISCORD_AVAILABLE:
     # ==================== GENERAL COMMANDS ====================
 
     @bot.hybrid_command(name='help', description="Show the Discord bot help menu")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def discord_help(ctx):
         embed = discord.Embed(
             title="📚 Discord Bot Help Menu",
@@ -450,19 +453,27 @@ if DISCORD_AVAILABLE:
         await ctx.send(embed=embed)
 
     @bot.hybrid_command(name='hello', description="Friendly greeting")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def discord_hello(ctx):
         await ctx.send(f'👋 Hello {ctx.author.mention}! Ready to customize your server? Type `/help` to see commands.')
 
     @bot.hybrid_command(name='echo', description="Repeat your message")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def discord_echo(ctx, *, text: str):
         await ctx.send(f'🔊 Echo: {text}')
 
     @bot.hybrid_command(name='ping', description="Check bot latency")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def discord_ping(ctx):
         latency = round(bot.latency * 1000)
         await ctx.send(f'🏓 Pong! Latency: {latency}ms')
 
     @bot.hybrid_command(name='info', description="Show bot information and stats")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def discord_info(ctx):
         embed = discord.Embed(title="🤖 Combined Bot Info", color=discord.Color.teal())
         embed.add_field(name="Platform", value="Telegram + Discord", inline=True)
@@ -472,6 +483,8 @@ if DISCORD_AVAILABLE:
         await ctx.send(embed=embed)
 
     @bot.hybrid_command(name='status', description="Show bot operational status")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def discord_status(ctx):
         status_text = "✅ **Bot Status**\n"
         status_text += "Discord: Online 🟢\n"
@@ -492,6 +505,8 @@ if DISCORD_AVAILABLE:
     # ==================== AI ASSISTANT (J.A.R.V.I.S.) ====================
 
     @bot.hybrid_command(name='ask', aliases=['ai'], description="Ask Jarvis AI anything")
+    @app_commands.allowed_installs(guilds=True, users=True)
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def discord_ask(ctx, *, prompt: str):
         """Ask Jarvis AI anything.
         Usage: /ask What is the speed of light?
