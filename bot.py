@@ -5,6 +5,7 @@ import asyncio
 import threading
 import time
 import os
+from typing import Optional
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -171,6 +172,13 @@ if DISCORD_AVAILABLE:
     async def on_ready():
         print(f'🤖 Discord bot logged in as {bot.user} (ID: {bot.user.id})')
         print('------')
+        # Sync slash commands with Discord
+        try:
+            synced = await bot.tree.sync()
+            print(f"✅ Synced {len(synced)} slash command(s) with Discord!")
+        except Exception as e:
+            print(f"⚠️ Failed to sync slash commands: {e}")
+
         # Default Rich Presence: Competing in Competitive (Playing Solo)
         activity = discord.Activity(
             type=discord.ActivityType.competing,
@@ -205,79 +213,79 @@ if DISCORD_AVAILABLE:
 
     # ==================== GENERAL COMMANDS ====================
 
-    @bot.command(name='help')
+    @bot.hybrid_command(name='help', description="Show the Discord bot help menu")
     async def discord_help(ctx):
         embed = discord.Embed(
             title="📚 Discord Bot Help Menu",
-            description="Here are all the available commands organized by category:",
+            description="All commands work with both `/command` (Slash) and `!command` (Prefix):",
             color=discord.Color.blue()
         )
         embed.add_field(
             name="🤖 General",
             value=(
-                "`!help` - Show this menu\n"
-                "`!hello` - Friendly greeting\n"
-                "`!echo <text>` - Repeat your message\n"
-                "`!ping` - Latency check\n"
-                "`!info` - Bot information\n"
-                "`!status` - Bot operational status"
+                "`/help` or `!help` - Show this menu\n"
+                "`/hello` or `!hello` - Friendly greeting\n"
+                "`/echo <text>` - Repeat your message\n"
+                "`/ping` or `!ping` - Latency check\n"
+                "`/info` or `!info` - Bot information\n"
+                "`/status` or `!status` - Bot operational status"
             ),
             inline=False
         )
         embed.add_field(
             name="🛡️ Role Management (Requires Manage Roles)",
             value=(
-                "`!giverole @user <role>` - Assign a role to a member\n"
-                "`!removerole @user <role>` - Remove a role from a member\n"
-                "`!createrole <name> [hex_color]` - Create a new role (e.g. `!createrole Gamer #ff0000`)\n"
-                "`!roles` - List all server roles and member counts\n"
-                "`!rolemenu <title> <@role1> [@role2...]` - Create an interactive self-role button panel"
+                "`/giverole @user <role>` - Assign a role to a member\n"
+                "`/removerole @user <role>` - Remove a role from a member\n"
+                "`/createrole <name> [color]` - Create a new role (e.g. `/createrole Gamer #ff0000`)\n"
+                "`/roles` - List all server roles and member counts\n"
+                "`/rolemenu <title> <@role1> [@role2...]` - Create an interactive self-role button panel"
             ),
             inline=False
         )
         embed.add_field(
             name="📁 Channel Management (Requires Manage Channels)",
             value=(
-                "`!createchannel <name> [text|voice] [category]` - Create a channel\n"
-                "`!deletechannel [#channel]` - Delete a channel (defaults to current)\n"
-                "`!createcategory <name>` - Create a new category"
+                "`/createchannel <name> [type] [category]` - Create a channel\n"
+                "`/deletechannel [#channel]` - Delete a channel (defaults to current)\n"
+                "`/createcategory <name>` - Create a new category"
             ),
             inline=False
         )
         embed.add_field(
             name="📜 Rules & Server Setup (Requires Admin)",
             value=(
-                "`!rules [#channel]` - Post a sleek pre-configured rules embed\n"
-                "`!postrules <Title> | <Rule 1> | <Rule 2>...` - Post custom rules\n"
-                "`!setup_server` - One-click server setup (channels, categories, roles)"
+                "`/rules [#channel]` - Post a sleek pre-configured rules embed\n"
+                "`/postrules <Title> | <Rule 1> | <Rule 2>...` - Post custom rules\n"
+                "`/setup_server` - One-click server setup (channels, categories, roles)"
             ),
             inline=False
         )
         embed.add_field(
             name="🎮 Presence Management (Requires Admin)",
             value=(
-                "`!setpresence <type> <name> [| state]` - Set custom bot activity\n"
-                "`!resetpresence` - Reset activity to Competitive (Playing Solo)"
+                "`/setpresence <type> <name> [| state]` - Set custom bot activity\n"
+                "`/resetpresence` - Reset activity to Competitive (Playing Solo)"
             ),
             inline=False
         )
         embed.set_footer(text="Tip: Ensure the bot's role is positioned high in Server Settings > Roles!")
         await ctx.send(embed=embed)
 
-    @bot.command(name='hello')
+    @bot.hybrid_command(name='hello', description="Friendly greeting")
     async def discord_hello(ctx):
-        await ctx.send(f'👋 Hello {ctx.author.mention}! Ready to customize your server? Type `!help` to see commands.')
+        await ctx.send(f'👋 Hello {ctx.author.mention}! Ready to customize your server? Type `/help` to see commands.')
 
-    @bot.command(name='echo')
+    @bot.hybrid_command(name='echo', description="Repeat your message")
     async def discord_echo(ctx, *, text: str):
         await ctx.send(f'🔊 Echo: {text}')
 
-    @bot.command(name='ping')
+    @bot.hybrid_command(name='ping', description="Check bot latency")
     async def discord_ping(ctx):
         latency = round(bot.latency * 1000)
         await ctx.send(f'🏓 Pong! Latency: {latency}ms')
 
-    @bot.command(name='info')
+    @bot.hybrid_command(name='info', description="Show bot information and stats")
     async def discord_info(ctx):
         embed = discord.Embed(title="🤖 Combined Bot Info", color=discord.Color.teal())
         embed.add_field(name="Platform", value="Telegram + Discord", inline=True)
@@ -286,7 +294,7 @@ if DISCORD_AVAILABLE:
         embed.add_field(name="Total Users", value=str(len(set(bot.get_all_members()))), inline=True)
         await ctx.send(embed=embed)
 
-    @bot.command(name='status')
+    @bot.hybrid_command(name='status', description="Show bot operational status")
     async def discord_status(ctx):
         status_text = "✅ **Bot Status**\n"
         status_text += "Discord: Online 🟢\n"
@@ -299,22 +307,22 @@ if DISCORD_AVAILABLE:
                 status_text += f" ({act_state})"
             status_text += "\n"
         status_text += "Telegram: Check your chat 💬\n"
-        status_text += "Prefix: `!`\n"
-        status_text += "Use `!help` for commands"
+        status_text += "Prefix: `/` (Slash) or `!`\n"
+        status_text += "Use `/help` for commands"
         await ctx.send(status_text)
 
     # ==================== PRESENCE MANAGEMENT ====================
 
-    @bot.command(name='setpresence')
+    @bot.hybrid_command(name='setpresence', description="Dynamically update bot presence (Admin only)")
     @commands.has_permissions(administrator=True)
     async def discord_setpresence(ctx, activity_type: str, *, text: str):
         """
         Dynamically update bot presence.
         Usage:
-          !setpresence competing Competitive | Playing Solo
-          !setpresence playing Overwatch 2
-          !setpresence watching Tournaments
-          !setpresence listening Chill Beats
+          /setpresence competing Competitive | Playing Solo
+          /setpresence playing Overwatch 2
+          /setpresence watching Tournaments
+          /setpresence listening Chill Beats
         """
         parts = [p.strip() for p in text.split('|', 1)]
         name = parts[0]
@@ -345,7 +353,7 @@ if DISCORD_AVAILABLE:
             embed.add_field(name="State", value=state, inline=True)
         await ctx.send(embed=embed)
 
-    @bot.command(name='resetpresence')
+    @bot.hybrid_command(name='resetpresence', description="Reset presence to default (Admin only)")
     @commands.has_permissions(administrator=True)
     async def discord_resetpresence(ctx):
         """Reset bot presence to default (Competitive | Playing Solo)."""
@@ -359,10 +367,10 @@ if DISCORD_AVAILABLE:
 
     # ==================== ROLE MANAGEMENT ====================
 
-    @bot.command(name='giverole')
+    @bot.hybrid_command(name='giverole', description="Assign an existing role to a member")
     @commands.has_permissions(manage_roles=True)
     @commands.bot_has_permissions(manage_roles=True)
-    async def discord_giverole(ctx, member: discord.Member, *, role: discord.Role):
+    async def discord_giverole(ctx, member: discord.Member, role: discord.Role):
         """Assign an existing role to a member."""
         if role >= ctx.guild.me.top_role:
             await ctx.send("❌ I cannot assign that role because it is higher than or equal to my highest role!")
@@ -382,10 +390,10 @@ if DISCORD_AVAILABLE:
         )
         await ctx.send(embed=embed)
 
-    @bot.command(name='removerole')
+    @bot.hybrid_command(name='removerole', description="Remove a role from a member")
     @commands.has_permissions(manage_roles=True)
     @commands.bot_has_permissions(manage_roles=True)
-    async def discord_removerole(ctx, member: discord.Member, *, role: discord.Role):
+    async def discord_removerole(ctx, member: discord.Member, role: discord.Role):
         """Remove a role from a member."""
         if role >= ctx.guild.me.top_role:
             await ctx.send("❌ I cannot remove that role because it is higher than or equal to my highest role!")
@@ -405,11 +413,11 @@ if DISCORD_AVAILABLE:
         )
         await ctx.send(embed=embed)
 
-    @bot.command(name='createrole')
+    @bot.hybrid_command(name='createrole', description="Create a new role with optional hex color")
     @commands.has_permissions(manage_roles=True)
     @commands.bot_has_permissions(manage_roles=True)
-    async def discord_createrole(ctx, name: str, color: str = None):
-        """Create a new role with an optional hex color (e.g. !createrole Gamer #ff0000)."""
+    async def discord_createrole(ctx, name: str, color: Optional[str] = None):
+        """Create a new role with an optional hex color (e.g. /createrole Gamer #ff0000)."""
         role_color = discord.Color.default()
         if color:
             clean_color = color.lstrip('#')
@@ -432,7 +440,7 @@ if DISCORD_AVAILABLE:
         embed.add_field(name="Color", value=f"`{str(new_role.color)}`", inline=True)
         await ctx.send(embed=embed)
 
-    @bot.command(name='roles')
+    @bot.hybrid_command(name='roles', description="List all server roles and their member counts")
     async def discord_roles(ctx):
         """List all server roles and their member counts."""
         roles = [r for r in ctx.guild.roles if not r.is_default()]
@@ -452,15 +460,24 @@ if DISCORD_AVAILABLE:
             embed.set_footer(text=f"Showing top 30 of {len(roles)} roles")
         await ctx.send(embed=embed)
 
-    @bot.command(name='rolemenu')
+    @bot.hybrid_command(name='rolemenu', description="Create an interactive self-role button panel")
     @commands.has_permissions(manage_roles=True)
     @commands.bot_has_permissions(manage_roles=True)
-    async def discord_rolemenu(ctx, title: str, *roles: discord.Role):
+    async def discord_rolemenu(
+        ctx,
+        title: str,
+        role1: discord.Role,
+        role2: Optional[discord.Role] = None,
+        role3: Optional[discord.Role] = None,
+        role4: Optional[discord.Role] = None,
+        role5: Optional[discord.Role] = None
+    ):
         """Create an interactive button menu for self-assignable roles.
-        Usage: !rolemenu "Pick Your Roles" @Gamer @Developer @Updates
+        Usage: /rolemenu "Pick Your Roles" @Gamer @Developer
         """
+        roles = [r for r in [role1, role2, role3, role4, role5] if r is not None]
         if not roles:
-            await ctx.send("⚠️ Please mention at least one role. Example: `!rolemenu \"Pick Roles\" @Gamer @Coder`")
+            await ctx.send("⚠️ Please specify at least one role.")
             return
 
         # Check bot hierarchy for all roles
@@ -480,12 +497,12 @@ if DISCORD_AVAILABLE:
 
     # ==================== CHANNEL MANAGEMENT ====================
 
-    @bot.command(name='createchannel')
+    @bot.hybrid_command(name='createchannel', description="Create a text or voice channel")
     @commands.has_permissions(manage_channels=True)
     @commands.bot_has_permissions(manage_channels=True)
-    async def discord_createchannel(ctx, name: str, channel_type: str = "text", *, category_name: str = None):
+    async def discord_createchannel(ctx, name: str, channel_type: str = "text", category_name: Optional[str] = None):
         """Create a text or voice channel.
-        Usage: !createchannel lounge text Community
+        Usage: /createchannel lounge text Community
         """
         category = None
         if category_name:
@@ -510,12 +527,12 @@ if DISCORD_AVAILABLE:
         embed.add_field(name="Type", value=channel_type.capitalize(), inline=True)
         await ctx.send(embed=embed)
 
-    @bot.command(name='deletechannel')
+    @bot.hybrid_command(name='deletechannel', description="Delete a channel (defaults to current channel)")
     @commands.has_permissions(manage_channels=True)
     @commands.bot_has_permissions(manage_channels=True)
-    async def discord_deletechannel(ctx, channel: discord.abc.GuildChannel = None):
+    async def discord_deletechannel(ctx, channel: Optional[discord.TextChannel] = None):
         """Delete a channel. Defaults to current channel if none specified.
-        Usage: !deletechannel #spam
+        Usage: /deletechannel #spam
         """
         target_channel = channel or ctx.channel
         channel_name = target_channel.name
@@ -533,12 +550,12 @@ if DISCORD_AVAILABLE:
             )
             await ctx.send(embed=embed)
 
-    @bot.command(name='createcategory')
+    @bot.hybrid_command(name='createcategory', description="Create a new category for organizing channels")
     @commands.has_permissions(manage_channels=True)
     @commands.bot_has_permissions(manage_channels=True)
     async def discord_createcategory(ctx, *, name: str):
         """Create a new category for organizing channels.
-        Usage: !createcategory Gaming
+        Usage: /createcategory Gaming
         """
         category = await ctx.guild.create_category(name=name, reason=f"Created by {ctx.author}")
         embed = discord.Embed(
@@ -550,11 +567,11 @@ if DISCORD_AVAILABLE:
 
     # ==================== RULES & SERVER SETUP ====================
 
-    @bot.command(name='rules')
+    @bot.hybrid_command(name='rules', description="Post a sleek community rules embed (Admin only)")
     @commands.has_permissions(administrator=True)
-    async def discord_rules(ctx, channel: discord.TextChannel = None):
+    async def discord_rules(ctx, channel: Optional[discord.TextChannel] = None):
         """Post a professionally formatted community rules embed.
-        Usage: !rules or !rules #rules
+        Usage: /rules or /rules #rules
         """
         target_channel = channel or ctx.channel
         embed = discord.Embed(
@@ -597,15 +614,15 @@ if DISCORD_AVAILABLE:
         if target_channel != ctx.channel:
             await ctx.send(f"✅ Rules have been posted to {target_channel.mention}!")
 
-    @bot.command(name='postrules')
+    @bot.hybrid_command(name='postrules', description="Post custom rules formatted with pipes (Admin only)")
     @commands.has_permissions(administrator=True)
     async def discord_postrules(ctx, *, content: str):
         """Post custom rules formatted with pipes.
-        Usage: !postrules Server Rules | 1. Be kind | 2. No spam | 3. Have fun
+        Usage: /postrules Server Rules | 1. Be kind | 2. No spam | 3. Have fun
         """
         parts = [p.strip() for p in content.split('|')]
         if len(parts) < 2:
-            await ctx.send("⚠️ Format: `!postrules Title | Rule 1 | Rule 2 | ...`")
+            await ctx.send("⚠️ Format: `/postrules Title | Rule 1 | Rule 2 | ...`")
             return
 
         title = parts[0]
@@ -622,11 +639,12 @@ if DISCORD_AVAILABLE:
         embed.set_footer(text="Thank you for keeping our community safe!")
         await ctx.send(embed=embed)
 
-    @bot.command(name='setup_server')
+    @bot.hybrid_command(name='setup_server', description="One-click server setup (Admin only)")
     @commands.has_permissions(administrator=True)
     @commands.bot_has_permissions(administrator=True, manage_channels=True, manage_roles=True)
     async def discord_setup_server(ctx):
         """Automated one-click server setup with categories, channels, roles, and rules."""
+        await ctx.defer()
         status_msg = await ctx.send("⚙️ Starting automated server setup... This may take a few seconds.")
 
         guild = ctx.guild
@@ -786,7 +804,7 @@ def main():
     if telegram_ready:
         print("   • Telegram bot will respond to /commands in your chat")
     if discord_ready:
-        print("   • Discord bot will respond to !commands in your server")
+        print("   • Discord bot will respond to /commands (Slash) and !commands in your server")
     print("   Press Ctrl+C to stop the bot(s)\n")
     
     # Start configured bots in separate threads
