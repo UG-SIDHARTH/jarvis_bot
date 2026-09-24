@@ -52,7 +52,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 DISCORD_PRIVILEGED_INTENTS = os.getenv("DISCORD_PRIVILEGED_INTENTS", "true").lower() in ("true", "1", "yes")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-AI_MODEL = os.getenv("AI_MODEL", "gemini-2.5-flash")
+AI_MODEL = os.getenv("AI_MODEL", "gemini-3.6-flash")
 
 # Web Claim Link Server Configuration
 CLAIM_SERVER_HOST = os.getenv("CLAIM_SERVER_HOST", "0.0.0.0")
@@ -932,7 +932,7 @@ async def generate_ai_response(
 
     # Build prioritized candidate model list with automatic fallbacks
     candidate_models = []
-    for m in [AI_MODEL, "gemini-2.5-flash"]:
+    for m in [AI_MODEL, "gemini-3.6-flash"]:
         if m and m not in candidate_models:
             candidate_models.append(m)
 
@@ -1024,7 +1024,7 @@ async def generate_ai_response(
 
     return (
         f"⚠️ My cognitive subsystems encountered an error: `{last_error or 'No supported model found'}`.\n"
-        "Please check your `GEMINI_API_KEY` or ensure `AI_MODEL=gemini-2.5-flash` is set in `.env`."
+        "Please check your `GEMINI_API_KEY` or ensure `AI_MODEL=gemini-3.6-flash` is set in `.env`."
     )
 
 # ===== TELEGRAM BOT FUNCTIONS =====
