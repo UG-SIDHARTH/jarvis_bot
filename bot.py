@@ -932,7 +932,7 @@ async def generate_ai_response(
 
     # Build prioritized candidate model list with automatic fallbacks
     candidate_models = []
-    for m in [AI_MODEL, "gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-flash-latest"]:
+    for m in [AI_MODEL, "gemini-2.5-flash"]:
         if m and m not in candidate_models:
             candidate_models.append(m)
 
